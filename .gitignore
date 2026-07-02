@@ -6,6 +6,7 @@
 
 # Dati di rete interni / risultati scansione: contengono IP, hostname,
 # fingerprint e vulnerabilità della rete interna, non vanno pubblicati
+instance/
 inventory.db
 inventory.db-journal
 scans/

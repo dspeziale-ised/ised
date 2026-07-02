@@ -70,17 +70,64 @@ BROWSER_LIKE_USER_AGENT = (
 )
 
 
+def _extract_balanced(text, start_idx, open_ch, close_ch):
+    """Ritorna la sottostringa da start_idx (che deve puntare a open_ch) fino
+    alla parentesi di chiusura corrispondente, ignorando le parentesi dentro
+    le stringhe. None se non trova una chiusura bilanciata."""
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start_idx, len(text)):
+        ch = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == open_ch:
+            depth += 1
+        elif ch == close_ch:
+            depth -= 1
+            if depth == 0:
+                return text[start_idx:i + 1]
+    return None
+
+
 def extract_json(text):
     """Estrae un oggetto JSON da una risposta del modello, anche se contiene
-    testo extra attorno al JSON (alcuni modelli non rispettano lo strict
-    JSON-mode)."""
+    testo extra attorno al JSON (alcuni modelli, specialmente quelli
+    'reasoning' come Nemotron, non rispettano lo strict JSON-mode e
+    aggiungono testo/JSON malformato prima o dopo il risultato vero)."""
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, re.S)
-        if not match:
-            raise
-        return json.loads(match.group(0))
+        pass
+
+    match = re.search(r"\{.*\}", text, re.S)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    # Ultimo tentativo: isola solo l'array "results" con una scansione a
+    # parentesi bilanciate, per salvare i casi in cui il modello ha
+    # circondato un array altrimenti valido con testo/chiavi malformate.
+    key_match = re.search(r'"results"\s*:\s*\[', text)
+    if key_match:
+        array_text = _extract_balanced(text, key_match.end() - 1, "[", "]")
+        if array_text:
+            try:
+                return {"results": json.loads(array_text)}
+            except json.JSONDecodeError:
+                pass
+
+    raise json.JSONDecodeError("Impossibile estrarre un JSON valido dalla risposta", text, 0)
 
 
 def parse_wait_seconds(detail):

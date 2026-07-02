@@ -50,7 +50,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 BASE = Path(__file__).parent
-DB_PATH = BASE / "inventory.db"
+DB_PATH = BASE / "instance" / "inventory.db"
 LOCK_FILE = BASE / "classify.lock"
 GROUPS_PER_REQUEST = 6
 SLEEP_BETWEEN_REQUESTS = 3.0
@@ -311,7 +311,12 @@ def main():
             batch = [(signature, group, build_payload(signature, group)) for signature, group in chunk]
 
             print(f"Classificazione: gruppi {i + 1}-{i + len(chunk)} di {len(items)}...")
-            start_provider_idx = process_batch(conn, batch, providers, provider_idx=start_provider_idx)
+            result_idx = process_batch(conn, batch, providers, provider_idx=start_provider_idx)
+            # Se il batch ha fallito su TUTTI i provider, result_idx è fuori
+            # range: si riparte dal primo provider per il prossimo batch,
+            # invece di restare bloccati per il resto del run (bug corretto:
+            # prima un fallimento totale disabilitava ogni tentativo futuro).
+            start_provider_idx = result_idx if result_idx < len(providers) else 0
 
             if i + args.groups_per_request < len(items):
                 time.sleep(SLEEP_BETWEEN_REQUESTS)

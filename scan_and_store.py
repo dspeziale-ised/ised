@@ -3,7 +3,7 @@
 i risultati (tipo dispositivo, OS, servizi) in un database SQLite.
 
 Uso tipico:
-    python scan_and_store.py --input up_ips.txt --db inventory.db
+    python scan_and_store.py --input up_ips.txt --db instance/inventory.db
 """
 
 import argparse
@@ -113,14 +113,17 @@ def run_batch(batch_ips, batch_idx, args, conn):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", default="up_ips.txt", help="File con un IP per riga")
-    parser.add_argument("--db", default="inventory.db", help="Percorso database SQLite")
+    parser.add_argument("--db", default="instance/inventory.db", help="Percorso database SQLite")
     parser.add_argument("--scans-dir", default="scans", help="Cartella per gli XML grezzi")
     parser.add_argument("--batch-size", type=int, default=32, help="Host per batch nmap")
     parser.add_argument("--top-ports", type=int, default=200, help="Numero porte da scansionare")
     parser.add_argument("--timing", default="4", choices=["1", "2", "3", "4", "5"],
                          help="Timing template nmap (-T)")
-    parser.add_argument("--host-timeout", default="90s", help="--host-timeout nmap per host")
-    parser.add_argument("--batch-timeout", type=int, default=1200,
+    parser.add_argument("--host-timeout", default="180s",
+                         help="--host-timeout nmap per host (90s era troppo aggressivo su reti "
+                              "con molti hop/filtri: causava host 'timed_out' con OS/servizi vuoti "
+                              "per la maggioranza degli host)")
+    parser.add_argument("--batch-timeout", type=int, default=1800,
                          help="Timeout (s) del processo nmap per l'intero batch")
     parser.add_argument("--no-os", action="store_true", help="Disabilita OS detection (-O)")
     parser.add_argument("--no-scripts", action="store_true",

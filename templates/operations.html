@@ -14,13 +14,17 @@
       <div class="card-header"><h3 class="card-title"><i class="fas fa-sync-alt"></i> Aggiorna scansione</h3></div>
       <div class="card-body">
         <p class="small">
-          Ri-estrae gli IP up da <code>data/ised.xml</code> e scansiona (nmap) solo quelli
-          nuovi/non ancora registrati.
+          Ri-estrae gli IP up da <strong>tutti</strong> i file <code>data/*.xml</code> (uniti e
+          deduplicati) e scansiona (nmap) solo quelli nuovi/non ancora registrati.
         </p>
-        {% if xml_exists %}
-        <p class="text-muted small">File attuale: modificato il <strong>{{ xml_mtime }}</strong></p>
+        {% if xml_files %}
+        <ul class="small text-muted mb-2 pl-3">
+          {% for f in xml_files %}
+          <li><code>{{ f.name }}</code> &mdash; {{ f.size_mb }} MB, modificato il {{ f.mtime }}</li>
+          {% endfor %}
+        </ul>
         {% else %}
-        <div class="alert alert-warning small">Nessun <code>data/ised.xml</code> trovato.</div>
+        <div class="alert alert-warning small">Nessun file <code>data/*.xml</code> trovato.</div>
         {% endif %}
         <button class="btn btn-primary job-start-btn" data-job="rescan" {{ 'disabled' if jobs_running.rescan else '' }}>
           <i class="fas fa-play"></i> Avvia

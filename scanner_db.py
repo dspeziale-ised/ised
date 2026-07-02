@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+from pathlib import Path
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS hosts (
@@ -113,6 +114,11 @@ CREATE INDEX IF NOT EXISTS idx_host_vulnerabilities_cve ON host_vulnerabilities(
 
 
 def connect(db_path):
+    """Apre (creando se serve) il DB SQLite in db_path. Crea anche la
+    cartella contenente il file (es. instance/) se non esiste già."""
+    path = Path(db_path)
+    if path.parent and not path.parent.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")

@@ -31,7 +31,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 BASE = Path(__file__).parent
-DB_PATH = BASE / "inventory.db"
+DB_PATH = BASE / "instance" / "inventory.db"
 LOCK_FILE = BASE / "vuln.lock"
 NMAP_BIN = shutil.which("nmap") or "nmap"
 

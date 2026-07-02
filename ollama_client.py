@@ -52,9 +52,13 @@ def _load_api_key():
     return None
 
 
-def classify_signature_groups(groups, timeout=90, model=None):
+def classify_signature_groups(groups, timeout=240, model=None):
     """groups: lista di dict {signature_id, os, services, evidence}.
-    Ritorna dict {signature_id: {device_type, vendor, confidence, reasoning}}."""
+    Ritorna dict {signature_id: {device_type, vendor, confidence, reasoning}}.
+
+    Timeout più alto del default (240s vs 90s degli altri provider): i
+    modelli 'reasoning' come Nemotron possono metterci molto più tempo per
+    via della catena di pensiero interna prima di emettere la risposta."""
     if not groups:
         return {}
 
@@ -62,10 +66,17 @@ def classify_signature_groups(groups, timeout=90, model=None):
     url = OLLAMA_CLOUD_URL if api_key else OLLAMA_LOCAL_URL
     chosen_model = model or OLLAMA_MODEL
 
+    system_prompt = SYSTEM_PROMPT
+    if "nemotron" in chosen_model.lower():
+        # Convenzione NVIDIA Nemotron per disabilitare la catena di pensiero
+        # estesa: riduce drasticamente latenza e il rischio che il modello
+        # produca testo/JSON malformato attorno alla risposta vera.
+        system_prompt = "detailed thinking off\n\n" + SYSTEM_PROMPT
+
     payload = {
         "model": chosen_model,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps({"groups": groups}, ensure_ascii=False)},
         ],
         "temperature": 0.1,

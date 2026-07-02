@@ -14,7 +14,7 @@ from flask import Flask, abort, g, jsonify, render_template, request, url_for
 import scanner_db
 
 BASE_DIR = Path(__file__).parent
-DB_PATH = Path(os.environ.get("INVENTORY_DB", BASE_DIR / "inventory.db"))
+DB_PATH = Path(os.environ.get("INVENTORY_DB", BASE_DIR / "instance" / "inventory.db"))
 SCAN_INPUT_FILE = Path(os.environ.get("SCAN_INPUT", BASE_DIR / "up_ips.txt"))
 
 app = Flask(__name__)
@@ -273,15 +273,18 @@ def scan_status_api():
 
 @app.route("/operations")
 def operations():
-    xml_path = BASE_DIR / "data" / "ised.xml"
-    xml_exists = xml_path.exists()
-    xml_mtime = None
-    if xml_exists:
-        xml_mtime = datetime.datetime.fromtimestamp(xml_path.stat().st_mtime).isoformat(timespec="seconds")
+    data_dir = BASE_DIR / "data"
+    xml_files = []
+    if data_dir.is_dir():
+        for p in sorted(data_dir.glob("*.xml")):
+            xml_files.append({
+                "name": p.name,
+                "mtime": datetime.datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec="seconds"),
+                "size_mb": round(p.stat().st_size / (1024 * 1024), 1),
+            })
     return render_template(
         "operations.html",
-        xml_exists=xml_exists,
-        xml_mtime=xml_mtime,
+        xml_files=xml_files,
         jobs_running={name: is_job_running(name) for name in JOBS},
     )
 
