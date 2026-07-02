@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %}Operazioni{% endblock %}
-{% block page_title %}Operazioni{% endblock %}
-{% block breadcrumb %}<li class="breadcrumb-item active">Operazioni</li>{% endblock %}
+{% block title %}Amministrazione{% endblock %}
+{% block page_title %}Amministrazione{% endblock %}
+{% block breadcrumb %}<li class="breadcrumb-item active">Amministrazione</li>{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -20,14 +20,21 @@
 
 {% block content %}
 <p class="text-muted">
-  Tutte le operazioni di raccolta/analisi dati si avviano da qui: nessun comando da terminale.
+  Tutta la pipeline (dal ping-sweep iniziale fino alla mappatura MITRE ATT&amp;CK) si avvia e si
+  automatizza da qui: nessun comando da terminale.
 </p>
 
 <div class="card card-outline card-primary">
   <div class="card-header p-0 border-bottom-0">
     <ul class="nav nav-tabs" id="opsTabs" role="tablist">
       <li class="nav-item">
-        <a class="nav-link active" id="tab-rescan-btn" data-toggle="tab" href="#tab-rescan" role="tab">
+        <a class="nav-link active" id="tab-discovery-btn" data-toggle="tab" href="#tab-discovery" role="tab">
+          <i class="fas fa-satellite-dish"></i> Discovery iniziale
+          <span class="badge job-status-badge ml-1" data-job="discovery"></span>
+        </a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link" id="tab-rescan-btn" data-toggle="tab" href="#tab-rescan" role="tab">
           <i class="fas fa-sync-alt"></i> Aggiorna scansione
           <span class="badge job-status-badge ml-1" data-job="rescan"></span>
         </a>
@@ -56,10 +63,65 @@
   <div class="card-body">
     <div class="tab-content" id="opsTabsContent">
 
-      <div class="tab-pane fade show active" id="tab-rescan" role="tabpanel">
+      <div class="tab-pane fade show active" id="tab-discovery" role="tabpanel">
+        <p class="small">
+          Passo 0 della pipeline: esegue un <strong>ping-sweep</strong> (<code>nmap -sn</code>) su
+          tutte le 256 subnet /16 di <code>10.0.0.0/8</code> in parallelo (script
+          <code>scripts/nmap-discovery-10net.ps1</code>), salvando un XML per subnet. Gli host
+          "up" trovati qui sono l'input del passo successivo ("Aggiorna scansione").
+        </p>
+        <div class="alert alert-warning small">
+          <i class="fas fa-triangle-exclamation"></i>
+          Su Windows il ping-sweep <code>-sn</code> usa raw socket e richiede privilegi di
+          <strong>Amministratore</strong> per risultati completi: se questa app non è eseguita come
+          amministratore, alcuni host potrebbero non essere rilevati.
+        </div>
+        <div class="form-row mb-2">
+          <div class="col-md-3">
+            <label class="small text-muted mb-1">Job paralleli (BatchSize)</label>
+            <input type="number" min="1" max="64" step="1" class="form-control form-control-sm" id="discoveryBatchSize" value="8">
+          </div>
+          <div class="col-md-6">
+            <label class="small text-muted mb-1">Cartella output XML</label>
+            <input type="text" class="form-control form-control-sm" id="discoveryOutputDir" value="{{ data_dir }}">
+            <small class="text-muted">Di default <code>data/</code>: cosi "Aggiorna scansione" trova subito i nuovi file.</small>
+          </div>
+          <div class="col-md-3">
+            <label class="small text-muted mb-1">Percorso nmap (opzionale)</label>
+            <input type="text" class="form-control form-control-sm" id="discoveryNmapPath" placeholder="nmap">
+          </div>
+        </div>
+        <button class="btn btn-warning job-start-btn mb-3" data-job="discovery" {{ 'disabled' if jobs_running.discovery else '' }}>
+          <i class="fas fa-play"></i> Avvia discovery
+        </button>
+        <button class="btn btn-outline-danger job-stop-btn mb-3" data-job="discovery" style="{{ '' if jobs_running.discovery else 'display:none;' }}">
+          <i class="fas fa-stop"></i> Interrompi
+        </button>
+        <p class="small text-muted mb-2">
+          Può richiedere da alcuni minuti a diverse ore in base a <code>BatchSize</code> e alla
+          reattività della rete: sono 256 subnet /16 da scansionare in totale, eseguite al massimo
+          <code>BatchSize</code> alla volta in parallelo.
+        </p>
+        {% if xml_files %}
+        <h6 class="text-muted">File XML già presenti in <code>data/</code></h6>
+        <ul class="small text-muted mb-2 pl-3" style="max-height:150px; overflow-y:auto;">
+          {% for f in xml_files %}
+          <li><code>{{ f.name }}</code> &mdash; {{ f.size_mb }} MB, modificato il {{ f.mtime }}</li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <div class="alert alert-secondary small">Nessun file <code>data/*.xml</code> ancora presente.</div>
+        {% endif %}
+        <h6 class="text-muted">Log</h6>
+        <pre class="op-log job-log" data-job="discovery"></pre>
+      </div>
+
+      <div class="tab-pane fade" id="tab-rescan" role="tabpanel">
         <p class="small">
           Ri-estrae gli IP up da <strong>tutti</strong> i file <code>data/*.xml</code> (uniti e
-          deduplicati) e scansiona (nmap) solo quelli nuovi/non ancora registrati.
+          deduplicati, tipicamente prodotti dal passo "Discovery iniziale") e scansiona (nmap)
+          solo quelli nuovi/non ancora registrati. Input attuale: <strong>{{ input_ip_count }}</strong>
+          IP in <code>up_ips.txt</code> dall'ultima estrazione.
         </p>
         {% if xml_files %}
         <ul class="small text-muted mb-2 pl-3">
@@ -68,7 +130,9 @@
           {% endfor %}
         </ul>
         {% else %}
-        <div class="alert alert-warning small">Nessun file <code>data/*.xml</code> trovato.</div>
+        <div class="alert alert-warning small">
+          Nessun file <code>data/*.xml</code> trovato: esegui prima "Discovery iniziale".
+        </div>
         {% endif %}
         <button class="btn btn-primary job-start-btn mb-3" data-job="rescan" {{ 'disabled' if jobs_running.rescan else '' }}>
           <i class="fas fa-play"></i> Avvia
@@ -187,6 +251,11 @@
 <script>
 {% include "_jobs_script.html" %}
 initJobWidgets({
+  discovery: { fields: [
+    { id: 'discoveryBatchSize', param: 'batch_size' },
+    { id: 'discoveryOutputDir', param: 'output_dir' },
+    { id: 'discoveryNmapPath', param: 'nmap_path' },
+  ] },
   rescan: { forceCheckbox: null },
   classify: { forceCheckbox: 'classifyForceCheck' },
   vuln: { forceCheckbox: 'vulnForceCheck' },

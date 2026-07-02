@@ -112,9 +112,9 @@
           </a>
         </li>
         <li class="nav-item">
-          <a href="{{ url_for('operations') }}" class="nav-link {{ 'active' if request.endpoint == 'operations' else '' }}">
-            <i class="nav-icon fas fa-cogs"></i>
-            <p>Operazioni</p>
+          <a href="{{ url_for('admin_panel') }}" class="nav-link {{ 'active' if request.endpoint == 'admin_panel' else '' }}">
+            <i class="nav-icon fas fa-user-shield"></i>
+            <p>Amministrazione</p>
           </a>
         </li>
       </ul>

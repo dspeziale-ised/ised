@@ -37,6 +37,10 @@ function initJobWidgets(jobs) {
         const force = cfg.forceCheckbox ? document.getElementById(cfg.forceCheckbox) : null;
         const body = new URLSearchParams();
         if (force && force.checked) body.set('force', '1');
+        (cfg.fields || []).forEach(function (f) {
+          const el = document.getElementById(f.id);
+          if (el && el.value !== '') body.set(f.param, el.value);
+        });
         fetch('/jobs/' + name + '/start', { method: 'POST', body: body })
           .then(function (r) { return r.json(); })
           .then(function (d) {

@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from flask import Flask, abort, g, jsonify, render_template, request, url_for
+from flask import Flask, abort, g, jsonify, redirect, render_template, request, url_for
 
 import cve_lookup
 import scanner_db
@@ -17,6 +17,8 @@ import scanner_db
 BASE_DIR = Path(__file__).parent
 DB_PATH = Path(os.environ.get("INVENTORY_DB", BASE_DIR / "instance" / "inventory.db"))
 SCAN_INPUT_FILE = Path(os.environ.get("SCAN_INPUT", BASE_DIR / "up_ips.txt"))
+SCRIPTS_DIR = BASE_DIR / "scripts"
+DATA_DIR = BASE_DIR / "data"
 
 app = Flask(__name__)
 
@@ -121,6 +123,23 @@ def is_scan_and_store_running():
         return False
 
 
+def is_discovery_running():
+    """True solo se lo script nmap-discovery-10net.ps1 di questo progetto è
+    attivo (stesso principio di is_scan_and_store_running: query sulla
+    command line dei processi powershell, non un generico nmap.exe/
+    powershell.exe che darebbe falsi positivi con processi indipendenti)."""
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process -Filter \"Name LIKE '%powershell%'\" "
+             "| Select-Object -ExpandProperty CommandLine"],
+            capture_output=True, text=True, timeout=8,
+        )
+        return "nmap-discovery-10net.ps1" in out.stdout
+    except Exception:
+        return False
+
+
 def is_pid_alive(pid):
     try:
         out = subprocess.run(
@@ -133,52 +152,62 @@ def is_pid_alive(pid):
 
 
 # Job in background avviabili dalla UI (niente più comandi a mano da terminale):
-# - rescan: estrae gli IP up da data/ised.xml e scansiona quelli nuovi (nmap)
+# - discovery: ping-sweep -sn su tutta 10.0.0.0/8 (script PowerShell) -> data/*.xml
+# - rescan: estrae gli IP up da data/*.xml e scansiona quelli nuovi (nmap)
 # - classify: classifica il tipo di dispositivo via LLM (Groq/Gemini/Ollama)
 # - vuln: cerca CVE per le CPE rilevate (nmap --script vulners, con cache)
+# - attack: mappa servizi/vulnerabilità sulle tecniche MITRE ATT&CK
 JOBS = {
+    "discovery": {
+        "cmd": ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                str(SCRIPTS_DIR / "nmap-discovery-10net.ps1")],
+        "lock_file": BASE_DIR / "discovery.lock",
+        "log_file": BASE_DIR / "discovery_log.txt",
+        "label": "Discovery iniziale",
+    },
     "rescan": {
         "cmd": [sys.executable, str(BASE_DIR / "run_rescan.py")],
         "lock_file": BASE_DIR / "rescan.lock",
         "log_file": BASE_DIR / "rescan_log.txt",
         "label": "Aggiornamento scansione",
-        "uses_nmap": True,  # copre anche scansioni avviate fuori da questo meccanismo
     },
     "classify": {
         "cmd": [sys.executable, str(BASE_DIR / "classify_devices.py")],
         "lock_file": BASE_DIR / "classify.lock",
         "log_file": BASE_DIR / "classify_log.txt",
         "label": "Classificazione AI",
-        "uses_nmap": False,
     },
     "vuln": {
         "cmd": [sys.executable, str(BASE_DIR / "vuln_scan.py")],
         "lock_file": BASE_DIR / "vuln.lock",
         "log_file": BASE_DIR / "vuln_log.txt",
         "label": "Scansione vulnerabilità",
-        # False: usa sempre il proprio lock file (mai avviato fuori da questo
-        # meccanismo), quindi il fallback su nmap.exe darebbe solo falsi
-        # positivi quando è "rescan" (altro job) a usare nmap in quel momento.
-        "uses_nmap": False,
     },
     "attack": {
         "cmd": [sys.executable, str(BASE_DIR / "attack_scan.py")],
         "lock_file": BASE_DIR / "attack.lock",
         "log_file": BASE_DIR / "attack_log.txt",
         "label": "Mappatura MITRE ATT&CK",
-        "uses_nmap": False,
     },
 }
 _job_processes = {}
+
+# Fallback di rilevamento "in corso" per job avviabili anche fuori da questo
+# meccanismo (riga di comando): controlla la command line dei processi per
+# il nome dello script specifico, MAI un generico nmap.exe/powershell.exe
+# attivo — altrimenti un processo indipendente dell'utente (es. una
+# ping-sweep manuale) farebbe scattare un falso positivo.
+JOB_FALLBACK_CHECK = {
+    "discovery": is_discovery_running,
+    "rescan": is_scan_and_store_running,
+}
 
 
 def is_job_running(name):
     """True se il job è già attivo. Verificato tramite lock file con PID
     (sopravvive ai riavvii del processo Flask, es. per l'auto-reload in
-    debug mode) e, per il job 'rescan', anche tramite il processo
-    scan_and_store.py (copre scansioni avviate fuori da questo meccanismo,
-    es. da riga di comando) — non un generico nmap.exe, per non confondersi
-    con scansioni nmap indipendenti (es. una ping-sweep lanciata a mano)."""
+    debug mode) e, dove applicabile, tramite JOB_FALLBACK_CHECK (copre
+    esecuzioni avviate fuori da questo meccanismo, es. da riga di comando)."""
     job = JOBS[name]
     proc = _job_processes.get(name)
     if proc is not None and proc.poll() is None:
@@ -197,7 +226,8 @@ def is_job_running(name):
         except OSError:
             pass
 
-    return is_scan_and_store_running() if job["uses_nmap"] else False
+    fallback = JOB_FALLBACK_CHECK.get(name)
+    return fallback() if fallback else False
 
 
 def start_job(name, extra_args=None):
@@ -212,6 +242,17 @@ def start_job(name, extra_args=None):
         cwd=BASE_DIR, stdout=log, stderr=subprocess.STDOUT,
     )
     _job_processes[name] = proc
+    log.close()  # il figlio ha già la sua copia duplicata del descrittore; non serve tenerlo aperto
+    # Scrive subito il PID nel lock file: script non Python (es. discovery,
+    # PowerShell) non gestiscono da soli un JobLock — farlo qui garantisce
+    # comunque la persistenza dello stato "in corso" a un riavvio di Flask.
+    # Per gli script Python è un doppio scritto innocuo: il loro JobLock
+    # scriverà a sua volta lo stesso PID (Popen esegue python direttamente,
+    # senza shell intermedia, quindi è lo stesso processo/PID).
+    try:
+        job["lock_file"].write_text(str(proc.pid), encoding="utf-8")
+    except OSError:
+        pass
     return True, None
 
 
@@ -316,19 +357,25 @@ def scan_status_api():
 
 
 @app.route("/operations")
-def operations():
-    data_dir = BASE_DIR / "data"
+def operations_redirect():
+    return redirect(url_for("admin_panel"))
+
+
+@app.route("/admin")
+def admin_panel():
     xml_files = []
-    if data_dir.is_dir():
-        for p in sorted(data_dir.glob("*.xml")):
+    if DATA_DIR.is_dir():
+        for p in sorted(DATA_DIR.glob("*.xml")):
             xml_files.append({
                 "name": p.name,
                 "mtime": datetime.datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec="seconds"),
                 "size_mb": round(p.stat().st_size / (1024 * 1024), 1),
             })
     return render_template(
-        "operations.html",
+        "admin.html",
         xml_files=xml_files,
+        data_dir=str(DATA_DIR),
+        input_ip_count=count_input_ips(),
         jobs_running={name: is_job_running(name) for name in JOBS},
     )
 
@@ -336,13 +383,36 @@ def operations():
 JOB_FORCE_FLAG = {"attack": "--update-matrix"}
 
 
+def build_discovery_args(values):
+    """Costruisce gli argomenti CLI per nmap-discovery-10net.ps1 dai campi del
+    form (BatchSize/OutputDir/NmapPath). Di default scrive gli XML direttamente
+    in data/, cosi il job 'rescan' successivo li trova senza passaggi manuali."""
+    args = []
+    batch_size = values.get("batch_size", type=int)
+    if batch_size and batch_size > 0:
+        args += ["-BatchSize", str(batch_size)]
+    output_dir = (values.get("output_dir") or "").strip()
+    args += ["-OutputDir", output_dir or str(DATA_DIR)]
+    nmap_path = (values.get("nmap_path") or "").strip()
+    if nmap_path:
+        args += ["-NmapPath", nmap_path]
+    return args
+
+
+JOB_ARGS_BUILDERS = {"discovery": build_discovery_args}
+
+
 @app.route("/jobs/<name>/start", methods=["POST"])
 def job_start(name):
     if name not in JOBS:
         return jsonify({"started": False, "reason": "Job sconosciuto."}), 404
-    extra_args = None
-    if request.values.get("force") == "1":
+    builder = JOB_ARGS_BUILDERS.get(name)
+    if builder:
+        extra_args = builder(request.values)
+    elif request.values.get("force") == "1":
         extra_args = [JOB_FORCE_FLAG.get(name, "--force")]
+    else:
+        extra_args = None
     ok, reason = start_job(name, extra_args=extra_args)
     return jsonify({"started": ok, "reason": reason})
 
