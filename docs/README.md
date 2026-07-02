@@ -2,10 +2,11 @@
 
 Applicazione web (Flask + AdminLTE) che scansiona una rete con **nmap**,
 registra host/servizi/OS in **SQLite**, li classifica per tipo di
-dispositivo tramite **LLM** (Ollama/Groq/Gemini con fallback automatico), e
-associa **CVE reali** ai servizi rilevati (NVD ufficiale + cache locale).
-Tutte le operazioni si avviano dalla UI web, senza comandi manuali da
-terminale.
+dispositivo tramite **LLM** (Ollama/Groq/Gemini con fallback automatico),
+associa **CVE reali** ai servizi rilevati (NVD ufficiale + cache locale) e
+mappa l'esposizione dei singoli host sulla matrice **MITRE ATT&CK**
+ufficiale. Tutte le operazioni si avviano dalla UI web, senza comandi
+manuali da terminale.
 
 ## Indice documentazione
 
@@ -28,6 +29,9 @@ Apri `http://127.0.0.1:5200`. Dalla pagina **Operazioni** puoi:
    ogni host
 3. **Scansionare le vulnerabilità** — associa le CVE note ai servizi con CPE
    rilevata (fonte primaria: NVD)
+4. **Mappare la matrice MITRE ATT&CK** — scarica (una volta) la matrice
+   ufficiale e mappa servizi/vulnerabilità/tipo dispositivo di ogni host
+   sulle tecniche ATT&CK applicabili, consultabile in **Matrice ATT&CK**
 
 ## Struttura del progetto
 
@@ -52,10 +56,15 @@ cve_lookup.py              Parsing output nmap/vulners + cache CVE (get/merge)
 vuln_scan.py               Orchestratore scansione vulnerabilità (NVD + fallback vulners)
 import_cve_cache.py        Import manuale cache CVE da file CSV/JSON
 
+attack_data.py             Download/parsing/cache della matrice ufficiale MITRE ATT&CK
+attack_mapping.py          Regole euristiche servizi/vulnerabilità/device_type -> tecniche ATT&CK
+attack_scan.py             Orchestratore mappatura ATT&CK su tutti gli host
+
 job_lock.py                Lock file basato su PID per i job in background
 
 templates/                 Template Jinja (AdminLTE 3, DataTables server-side)
 instance/inventory.db      Database SQLite (non versionato)
+instance/attack_enterprise.json  Cache locale della matrice ufficiale MITRE ATT&CK (~47MB, non versionato)
 data/*.xml                 Output nmap ping-sweep da cui si estraggono gli IP (non versionato)
 ```
 

@@ -11,9 +11,12 @@
    (raggruppa per fingerprint identico, un LLM per gruppo, fallback multi-provider)
 5. vuln_scan.py                              →  cve_cache + host_vulnerabilities
    (raggruppa per CPE identica, NVD diretto per CPE, fallback nmap --script vulners)
+6. attack_scan.py                            →  attack_tactics/attack_techniques + host_attack_techniques
+   (scarica/cacha la matrice ufficiale MITRE ATT&CK, poi mappa servizi/vulnerabilità/
+    tipo dispositivo di ogni host sulle tecniche applicabili, euristica locale)
 ```
 
-I passi 2-5 sono tutti avviabili dalla UI web (pagina **Operazioni**), non
+I passi 2-6 sono tutti avviabili dalla UI web (pagina **Operazioni**), non
 richiedono l'uso del terminale. Il passo 1 (ping sweep iniziale, tipicamente
 `nmap -sn 10.0.0.0/8`) resta manuale/esterno perché scansiona range enormi e
 può richiedere ore/giorni; il suo output XML va semplicemente depositato in
@@ -21,13 +24,17 @@ può richiedere ore/giorni; il suo output XML va semplicemente depositato in
 
 ## Il meccanismo "job" (background task da UI)
 
-Tre operazioni lunghe (`rescan`, `classify`, `vuln`) sono gestite da un
-meccanismo comune in `app.py`:
+Quattro operazioni lunghe (`rescan`, `classify`, `vuln`, `attack`) sono
+gestite da un meccanismo comune in `app.py`:
 
-- `JOBS = {"rescan": {...}, "classify": {...}, "vuln": {...}}` — per ciascuna:
-  comando da eseguire, file di lock, file di log
+- `JOBS = {"rescan": {...}, "classify": {...}, "vuln": {...}, "attack": {...}}`
+  — per ciascuna: comando da eseguire, file di lock, file di log
 - `start_job(name)` — se non già in corso, lancia lo script come
   `subprocess.Popen` in background, scrivendo stdout/stderr su un file di log
+- `stop_job(name)` — termina il job in corso con `taskkill /F /T /PID <pid>`:
+  il flag `/T` termina anche l'intero albero di processi figli (es. nmap
+  lanciato da `scan_and_store.py`), necessario su Windows dove terminare solo
+  il processo padre lascia i figli orfani ancora in esecuzione
 - `is_job_running(name)` — verifica se già attivo tramite:
   1. Riferimento al processo in memoria (`_job_processes`, se lo stesso
      processo Flask ha avviato il job)
@@ -42,11 +49,16 @@ meccanismo comune in `app.py`:
      fuori da questo meccanismo. **Non** si usa un generico "nmap.exe è
      attivo": altrimenti un nmap indipendente dell'utente (es. una
      ping-sweep manuale) farebbe scattare un falso positivo
-- Endpoint generici: `POST /jobs/<name>/start`, `GET /api/jobs/<name>/status`
+- Endpoint generici: `POST /jobs/<name>/start`, `POST /jobs/<name>/stop`,
+  `GET /api/jobs/<name>/status`. Il flag "force" del form di avvio viene
+  tradotto nel flag CLI corretto per lo script (`JOB_FORCE_FLAG`): normalmente
+  `--force`, ma `--update-matrix` per il job `attack` (dove non si tratta di
+  "riclassificare" ma di ri-scaricare la matrice ufficiale MITRE)
 - Frontend: `templates/_jobs_script.html` (funzione `initJobWidgets`)
   cerca nella pagina corrente elementi `.job-start-btn[data-job=X]`,
-  `.job-status-badge[data-job=X]`, `.job-log[data-job=X]` e li collega
-  automaticamente agli endpoint sopra, con polling ogni 4s
+  `.job-stop-btn[data-job=X]`, `.job-status-badge[data-job=X]`,
+  `.job-log[data-job=X]` e li collega automaticamente agli endpoint sopra,
+  con polling ogni 4s
 
 ## Schema database (SQLite, `instance/inventory.db`)
 
@@ -68,6 +80,12 @@ scans             started_at, finished_at, target_count, xml_path, command, stat
 
 cve_cache         cpe (PK), cve_json, fetched_at         -- cache CVE per CPE (lista di {id, cvss, url})
 host_vulnerabilities  (host_id →) port, cpe, cve_id, cvss, url, source, detected_at
+
+attack_tactics             shortname (PK), name, description, url, sort_order      -- le 15 tattiche ATT&CK Enterprise
+attack_techniques          technique_id (PK, es. 'T1021.001'), name, description, url,
+                            is_subtechnique, parent_technique_id, platforms          -- tecniche/sotto-tecniche ufficiali
+attack_technique_tactics   (technique_id, tactic_shortname) PK composita              -- relazione N:M tecnica<->tattica
+host_attack_techniques     (host_id →) technique_id, reason, source, detected_at      -- mappatura euristica per host
 ```
 
 Note di design:
@@ -139,13 +157,45 @@ Per default classifica solo gli host con `ai_device_type IS NULL` (nuovi);
 **pre-popolare** la cache da un file CSV/JSON esterno, con **merge** (non
 sovrascrittura) sulle CVE già in cache per la stessa CPE.
 
+## MITRE ATT&CK: matrice ufficiale + mappatura euristica
+
+`attack_data.py`:
+1. Scarica il dataset ufficiale MITRE ATT&CK Enterprise (STIX 2.1,
+   `github.com/mitre/cti`, ~47MB) e lo cacha in
+   `instance/attack_enterprise.json` (non riscaricato ad ogni avvio)
+2. Estrae tattiche (`x-mitre-tactic`), tecniche/sotto-tecniche
+   (`attack-pattern`, escludendo revoked/deprecated) e la loro relazione
+   N:M, popolando `attack_tactics`/`attack_techniques`/`attack_technique_tactics`
+3. L'ordine delle tattiche (colonne della matrice) segue `tactic_refs`
+   dell'oggetto `x-mitre-matrix` ufficiale, non un ordine arbitrario
+
+`attack_mapping.py` contiene le regole euristiche (verificate contro il
+dataset reale, non tecniche inventate): porta/servizio esposto ->
+tecnica ATT&CK plausibile (es. porta 3389 -> T1021.001 "Remote Desktop
+Protocol"), CVE critiche note -> T1210 "Exploitation of Remote Services",
+tipo dispositivo (router/switch/firewall) -> T1599/T1016. **Non è
+un'analisi di exploit reali**: segnala esposizione potenziale in base a
+cosa un host espone sulla rete.
+
+`attack_scan.py` (job `attack` in Operazioni):
+1. Garantisce che la matrice sia caricata (download solo se mancante, o
+   sempre con `--update-matrix`)
+2. Ricalcola la mappatura per **tutti** gli host ad ogni esecuzione (nessuna
+   chiamata esterna oltre l'eventuale download matrice, quindi il costo è
+   trascurabile — a differenza di classify/vuln non c'è un concetto di "solo
+   i nuovi")
+
+La vista `/attack-matrix` mostra una matrice colorata (colonne = tattiche,
+celle = tecniche, colore/intensità = numero di host esposti); click su una
+cella apre il dettaglio degli host coinvolti e del motivo della mappatura.
+
 ## Route Flask principali
 
 | Route | Metodo | Descrizione |
 |---|---|---|
 | `/` | GET | Dashboard: stat box, stato scansione live, distribuzione tipo dispositivo |
-| `/hosts`, `/api/hosts` | GET | Elenco host (DataTable server-side, filtri tipo/OS) |
-| `/hosts/<ip>` | GET | Dettaglio host: OS match, servizi, ruoli AI, vulnerabilità |
+| `/hosts`, `/api/hosts` | GET | Elenco host (DataTable server-side, filtri tipo dispositivo/famiglia OS/OS) |
+| `/hosts/<ip>` | GET | Dettaglio host: OS match, servizi, ruoli AI, vulnerabilità, tecniche ATT&CK |
 | `/hosts/<ip>/device-type` | POST | Modifica manuale device_type (imposta `device_type_manual=1`) |
 | `/services`, `/api/services` | GET | Servizi aggregati per porta/nome |
 | `/services/hosts`, `/api/service-hosts` | GET | Host che espongono un dato servizio |
@@ -153,9 +203,12 @@ sovrascrittura) sulle CVE già in cache per la stessa CPE.
 | `/vulnerabilities`, `/api/vulnerabilities` | GET | CVE rilevate (DataTable, filtro CVSS minimo) |
 | `/vuln/import-cache` | POST | Upload file CSV/JSON per pre-popolare la cache CVE |
 | `/api/cve-cache-stats` | GET | Statistiche cache CVE (n. CPE, n. CVE totali) |
+| `/attack-matrix` | GET | Matrice MITRE ATT&CK colorata per esposizione |
+| `/api/attack-matrix/technique/<id>/hosts` | GET | Host esposti a una data tecnica ATT&CK |
 | `/scans`, `/api/scans` | GET | Log dei batch di scansione nmap |
-| `/operations` | GET | Pagina unica (3 tab) per avviare rescan/classify/vuln |
-| `/jobs/<name>/start` | POST | Avvia un job in background (`rescan`\|`classify`\|`vuln`) |
+| `/operations` | GET | Pagina unica (4 tab) per avviare rescan/classify/vuln/attack |
+| `/jobs/<name>/start` | POST | Avvia un job in background (`rescan`\|`classify`\|`vuln`\|`attack`) |
+| `/jobs/<name>/stop` | POST | Interrompe un job in corso (intero albero di processi) |
 | `/api/jobs/<name>/status` | GET | Stato + log di un job |
 | `/api/scan-status` | GET | Progresso dettagliato della scansione (% completamento, ETA) |
 
@@ -172,3 +225,7 @@ sovrascrittura) sulle CVE già in cache per la stessa CPE.
 - **Mappa di rete**: albero HTML/CSS/JS puro (nessuna libreria SVG come
   D3.js — sostituita perché causava una UI illeggibile con centinaia di
   nodi), stesso pattern del menu collassabile della sidebar AdminLTE
+- **Matrice ATT&CK**: griglia CSS pura (colonne flex scrollabili
+  orizzontalmente, una per tattica), nessuna libreria matrice/grafo esterna;
+  colore delle celle calcolato lato server in base al numero di host esposti,
+  click su una cella apre un modal Bootstrap con l'elenco host via fetch

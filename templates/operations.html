@@ -44,6 +44,12 @@
           <span class="badge job-status-badge ml-1" data-job="vuln"></span>
         </a>
       </li>
+      <li class="nav-item">
+        <a class="nav-link" id="tab-attack-btn" data-toggle="tab" href="#tab-attack" role="tab">
+          <i class="fas fa-crosshairs"></i> Matrice ATT&amp;CK
+          <span class="badge job-status-badge ml-1" data-job="attack"></span>
+        </a>
+      </li>
     </ul>
   </div>
 
@@ -145,6 +151,33 @@
         <pre class="op-log job-log" data-job="vuln"></pre>
       </div>
 
+      <div class="tab-pane fade" id="tab-attack" role="tabpanel">
+        <p class="small">
+          Mappa servizi, vulnerabilità e tipo dispositivo di ogni host sulle tecniche
+          <strong>MITRE ATT&amp;CK Enterprise</strong> applicabili (es. RDP esposto &rarr; T1021.001),
+          usando la matrice ufficiale scaricata da <code>github.com/mitre/cti</code> (cachata
+          localmente). Mappatura euristica locale: viene sempre ricalcolata per tutti gli host,
+          nessun costo/rate-limit oltre all'eventuale download della matrice.
+        </p>
+        <div class="form-check mb-2">
+          <input type="checkbox" class="form-check-input" id="attackForceCheck">
+          <label class="form-check-label small" for="attackForceCheck">
+            Ri-scarica anche la matrice ufficiale MITRE ATT&amp;CK (~47 MB, --update-matrix)
+          </label>
+        </div>
+        <button class="btn btn-warning job-start-btn mb-3" data-job="attack" {{ 'disabled' if jobs_running.attack else '' }}>
+          <i class="fas fa-play"></i> Avvia
+        </button>
+        <button class="btn btn-outline-danger job-stop-btn mb-3" data-job="attack" style="{{ '' if jobs_running.attack else 'display:none;' }}">
+          <i class="fas fa-stop"></i> Interrompi
+        </button>
+        <a href="{{ url_for('attack_matrix') }}" class="btn btn-outline-secondary mb-3">
+          <i class="fas fa-th"></i> Vai alla matrice
+        </a>
+        <h6 class="text-muted">Log</h6>
+        <pre class="op-log job-log" data-job="attack"></pre>
+      </div>
+
     </div>
   </div>
 </div>
@@ -157,6 +190,7 @@ initJobWidgets({
   rescan: { forceCheckbox: null },
   classify: { forceCheckbox: 'classifyForceCheck' },
   vuln: { forceCheckbox: 'vulnForceCheck' },
+  attack: { forceCheckbox: 'attackForceCheck' },
 });
 
 function refreshCveCacheStats() {

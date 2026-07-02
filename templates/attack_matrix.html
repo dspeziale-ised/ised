@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+{% block title %}Matrice ATT&CK{% endblock %}
+{% block page_title %}Matrice MITRE ATT&CK{% endblock %}
+{% block breadcrumb %}<li class="breadcrumb-item active">Matrice ATT&amp;CK</li>{% endblock %}
+
+{% block extra_css %}
+<style>
+  .attack-matrix-scroll {
+    overflow-x: auto;
+    padding-bottom: .5rem;
+  }
+  .attack-matrix {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    min-width: max-content;
+  }
+  .attack-tactic-col {
+    width: 190px;
+    flex-shrink: 0;
+  }
+  .attack-tactic-header {
+    background: #495057;
+    color: #fff;
+    font-size: .78rem;
+    font-weight: 600;
+    text-align: center;
+    padding: .4rem .3rem;
+    border-radius: .25rem .25rem 0 0;
+    min-height: 46px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .attack-technique {
+    display: block;
+    width: 100%;
+    text-align: left;
+    font-size: .72rem;
+    padding: .3rem .4rem;
+    margin-top: 2px;
+    border: none;
+    border-radius: 2px;
+    cursor: pointer;
+    line-height: 1.25;
+  }
+  .attack-technique.sub {
+    padding-left: .9rem;
+    opacity: .92;
+  }
+  .attack-technique:hover {
+    outline: 2px solid #343a40;
+  }
+  .exposure-0 { background: #e9ecef; color: #495057; }
+  .exposure-1 { background: #ffe8a1; color: #5c4500; }
+  .exposure-2 { background: #ffc069; color: #5c3d00; }
+  .exposure-3 { background: #ff8f6b; color: #4d1f00; }
+  .exposure-4 { background: #e6483e; color: #fff; }
+  .attack-empty-col {
+    color: #adb5bd;
+    font-size: .72rem;
+    text-align: center;
+    padding: .5rem;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+  <div class="col-lg-4 col-6">
+    <div class="small-box bg-warning">
+      <div class="inner">
+        <h3>{{ hosts_exposed }}</h3>
+        <p>Host con esposizione potenziale</p>
+      </div>
+      <div class="icon"><i class="fas fa-crosshairs"></i></div>
+    </div>
+  </div>
+  <div class="col-lg-4 col-6">
+    <div class="small-box bg-secondary">
+      <div class="inner">
+        <h3>{{ total_hosts }}</h3>
+        <p>Host totali</p>
+      </div>
+      <div class="icon"><i class="fas fa-desktop"></i></div>
+    </div>
+  </div>
+</div>
+
+{% if not loaded %}
+<div class="alert alert-info">
+  Matrice MITRE ATT&amp;CK non ancora caricata. Vai in
+  <a href="{{ url_for('operations') }}">Operazioni &rarr; Matrice ATT&amp;CK</a> e clicca "Avvia"
+  per scaricare la matrice ufficiale e calcolare la mappatura sugli host.
+</div>
+{% endif %}
+
+<div class="card card-outline card-warning">
+  <div class="card-header">
+    <h3 class="card-title">Esposizione per tattica / tecnica</h3>
+    <div class="card-tools">
+      <div class="custom-control custom-switch d-inline-block mr-2">
+        <input type="checkbox" class="custom-control-input" id="onlyExposedSwitch" checked>
+        <label class="custom-control-label small" for="onlyExposedSwitch">Solo tecniche con esposizione</label>
+      </div>
+      <a href="{{ url_for('operations') }}" class="btn btn-sm btn-outline-secondary">
+        <i class="fas fa-sync-alt"></i> Ricalcola
+      </a>
+    </div>
+  </div>
+  <div class="card-body">
+    <p class="text-muted small mb-2">
+      Ogni cella è una tecnica ATT&amp;CK potenzialmente applicabile in base a servizi/vulnerabilità/tipo
+      dispositivo rilevati (non un exploit confermato). Il colore indica quanti host sono esposti a
+      quella tecnica; clicca una cella per vedere l'elenco degli host.
+    </p>
+    <div class="attack-matrix-scroll">
+      <div class="attack-matrix">
+        {% for t in tactics %}
+        <div class="attack-tactic-col" data-tactic="{{ t.shortname }}">
+          <div class="attack-tactic-header" title="{{ t.description or '' }}">{{ t.name }}</div>
+          <div class="attack-tactic-body">
+            {% set techniques = techniques_by_tactic.get(t.shortname, []) %}
+            {% if not techniques %}
+            <div class="attack-empty-col">&mdash;</div>
+            {% endif %}
+            {% for tech in techniques|sort(attribute='host_count', reverse=True) %}
+            {% set level = 0 if tech.host_count == 0 else (1 if tech.host_count == 1 else (2 if tech.host_count <= 3 else (3 if tech.host_count <= 8 else 4))) %}
+            <button type="button" class="attack-technique exposure-{{ level }}{{ ' sub' if tech.is_subtechnique else '' }}"
+                    data-technique="{{ tech.technique_id }}"
+                    data-exposed="{{ '1' if tech.host_count > 0 else '0' }}"
+                    title="{{ tech.name }}">
+              <strong>{{ tech.technique_id }}</strong> {{ tech.name }}
+              {% if tech.host_count %}<span class="float-right">{{ tech.host_count }}</span>{% endif %}
+            </button>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<div class="modal fade" id="techniqueModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="techniqueModalTitle">&nbsp;</h5>
+        <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+      </div>
+      <div class="modal-body">
+        <p id="techniqueModalDesc" class="small text-muted"></p>
+        <table class="table table-sm table-striped">
+          <thead><tr><th>IP</th><th>Tipo dispositivo</th><th>Motivo</th></tr></thead>
+          <tbody id="techniqueModalHosts"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+document.querySelectorAll('.attack-technique').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    const techniqueId = btn.dataset.technique;
+    fetch('/api/attack-matrix/technique/' + encodeURIComponent(techniqueId) + '/hosts')
+      .then(r => r.json())
+      .then(d => {
+        const t = d.technique || {};
+        document.getElementById('techniqueModalTitle').innerHTML =
+          (t.url ? `<a href="${t.url}" target="_blank" rel="noopener">${t.technique_id}</a>` : t.technique_id) +
+          ' &mdash; ' + (t.name || '');
+        document.getElementById('techniqueModalDesc').textContent = (t.description || '').split('\n')[0];
+        const tbody = document.getElementById('techniqueModalHosts');
+        tbody.innerHTML = '';
+        if (!d.hosts.length) {
+          tbody.innerHTML = '<tr><td colspan="3" class="text-muted">Nessun host esposto a questa tecnica.</td></tr>';
+        } else {
+          d.hosts.forEach(h => {
+            const tr = document.createElement('tr');
+            tr.innerHTML =
+              `<td><a href="${h.ip_url}">${h.ip}</a></td>` +
+              `<td><span class="badge badge-${h.device_badge}">${h.device_type}</span></td>` +
+              `<td><small>${h.reason || ''}</small></td>`;
+            tbody.appendChild(tr);
+          });
+        }
+        $('#techniqueModal').modal('show');
+      });
+  });
+});
+
+document.getElementById('onlyExposedSwitch').addEventListener('change', function () {
+  const onlyExposed = this.checked;
+  document.querySelectorAll('.attack-technique').forEach(function (btn) {
+    btn.style.display = (!onlyExposed || btn.dataset.exposed === '1') ? '' : 'none';
+  });
+});
+document.getElementById('onlyExposedSwitch').dispatchEvent(new Event('change'));
+
+{% include "_jobs_script.html" %}
+initJobWidgets({ attack: {} });
+</script>
+{% endblock %}

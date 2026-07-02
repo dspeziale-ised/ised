@@ -57,9 +57,15 @@ Modelli di default (sovrascrivibili con variabili d'ambiente
    vendor/ruoli per gli host nuovi
 4. **Operazioni → Scansione vulnerabilità → Avvia**: associa le CVE note ai
    servizi con CPE rilevata
+5. **Operazioni → Matrice ATT&CK → Avvia**: scarica (la prima volta, ~47MB)
+   la matrice ufficiale MITRE ATT&CK e mappa ogni host sulle tecniche
+   applicabili, consultabile in **Matrice ATT&CK**
 
 Tutti i job successivi (con `--resume`/senza `--force`) elaborano solo i
-dati nuovi, non ripetono lavoro già fatto.
+dati nuovi, non ripetono lavoro già fatto. Fa eccezione il job **Matrice
+ATT&CK**: essendo una mappatura euristica locale (nessun costo/rate-limit
+esterno oltre al download iniziale della matrice), viene sempre ricalcolata
+per tutti gli host ad ogni esecuzione.
 
 ## Reset completo
 

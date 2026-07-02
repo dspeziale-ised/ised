@@ -189,6 +189,37 @@
         </table>
       </div>
     </div>
+
+    <div class="card card-outline card-warning">
+      <div class="card-header">
+        <h3 class="card-title"><i class="fas fa-crosshairs"></i> Tecniche MITRE ATT&amp;CK potenziali ({{ attack_techniques|length }})</h3>
+        <div class="card-tools">
+          <a href="{{ url_for('attack_matrix') }}" class="btn btn-sm btn-outline-secondary">
+            <i class="fas fa-th"></i> Vai alla matrice
+          </a>
+        </div>
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-striped table-sm">
+          <thead>
+            <tr><th>Tecnica</th><th>Nome</th><th>Motivo</th></tr>
+          </thead>
+          <tbody>
+            {% for t in attack_techniques %}
+            <tr>
+              <td>
+                {% if t.url %}<a href="{{ t.url }}" target="_blank" rel="noopener">{{ t.technique_id }}</a>{% else %}{{ t.technique_id }}{% endif %}
+              </td>
+              <td>{{ t.name }}</td>
+              <td><small>{{ t.reason }}</small></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="3" class="text-muted">Nessuna tecnica mappata (o mappatura MITRE ATT&amp;CK non ancora eseguita).</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}

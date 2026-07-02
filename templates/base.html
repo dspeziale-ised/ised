@@ -100,6 +100,12 @@
           </a>
         </li>
         <li class="nav-item">
+          <a href="{{ url_for('attack_matrix') }}" class="nav-link {{ 'active' if request.endpoint == 'attack_matrix' else '' }}">
+            <i class="nav-icon fas fa-crosshairs"></i>
+            <p>Matrice ATT&amp;CK</p>
+          </a>
+        </li>
+        <li class="nav-item">
           <a href="{{ url_for('scans_list') }}" class="nav-link {{ 'active' if request.endpoint == 'scans_list' else '' }}">
             <i class="nav-icon fas fa-history"></i>
             <p>Log Scansioni</p>

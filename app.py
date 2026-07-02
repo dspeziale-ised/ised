@@ -161,6 +161,13 @@ JOBS = {
         # positivi quando è "rescan" (altro job) a usare nmap in quel momento.
         "uses_nmap": False,
     },
+    "attack": {
+        "cmd": [sys.executable, str(BASE_DIR / "attack_scan.py")],
+        "lock_file": BASE_DIR / "attack.lock",
+        "log_file": BASE_DIR / "attack_log.txt",
+        "label": "Mappatura MITRE ATT&CK",
+        "uses_nmap": False,
+    },
 }
 _job_processes = {}
 
@@ -326,11 +333,16 @@ def operations():
     )
 
 
+JOB_FORCE_FLAG = {"attack": "--update-matrix"}
+
+
 @app.route("/jobs/<name>/start", methods=["POST"])
 def job_start(name):
     if name not in JOBS:
         return jsonify({"started": False, "reason": "Job sconosciuto."}), 404
-    extra_args = ["--force"] if request.values.get("force") == "1" else None
+    extra_args = None
+    if request.values.get("force") == "1":
+        extra_args = [JOB_FORCE_FLAG.get(name, "--force")]
     ok, reason = start_job(name, extra_args=extra_args)
     return jsonify({"started": ok, "reason": reason})
 
@@ -540,10 +552,11 @@ def host_detail(ip):
         "SELECT * FROM host_vulnerabilities WHERE host_id = ? ORDER BY cvss DESC NULLS LAST, cve_id",
         (host["id"],),
     ).fetchall()
+    attack_techniques = scanner_db.get_host_attack_techniques(db, host["id"])
     return render_template(
         "host_detail.html", host=host, os_matches=os_matches, services=services,
         device_type_options=sorted(DEVICE_COLOR.keys()), roles=roles,
-        vulnerabilities=vulnerabilities,
+        vulnerabilities=vulnerabilities, attack_techniques=attack_techniques,
     )
 
 
@@ -942,6 +955,40 @@ def api_network_map():
         return node
 
     return jsonify(finalize(root))
+
+
+@app.route("/attack-matrix")
+def attack_matrix():
+    db = get_db()
+    scanner_db.ensure_attack_tables(db)
+    matrix = scanner_db.attack_matrix_data(db, only_exposed=False)
+    total_hosts = db.execute("SELECT COUNT(*) c FROM hosts").fetchone()["c"]
+    hosts_exposed = db.execute(
+        "SELECT COUNT(DISTINCT host_id) c FROM host_attack_techniques"
+    ).fetchone()["c"]
+    loaded = db.execute("SELECT COUNT(*) c FROM attack_techniques").fetchone()["c"] > 0
+    return render_template(
+        "attack_matrix.html", tactics=matrix["tactics"],
+        techniques_by_tactic=matrix["techniques_by_tactic"],
+        total_hosts=total_hosts, hosts_exposed=hosts_exposed, loaded=loaded,
+    )
+
+
+@app.route("/api/attack-matrix/technique/<technique_id>/hosts")
+def api_attack_technique_hosts(technique_id):
+    db = get_db()
+    hosts = scanner_db.hosts_for_technique(db, technique_id)
+    technique = db.execute(
+        "SELECT technique_id, name, description, url FROM attack_techniques WHERE technique_id = ?",
+        (technique_id,),
+    ).fetchone()
+    return jsonify({
+        "technique": dict(technique) if technique else None,
+        "hosts": [
+            {**h, "ip_url": url_for("host_detail", ip=h["ip"]), "device_badge": badge_class(h["device_type"])}
+            for h in hosts
+        ],
+    })
 
 
 if __name__ == "__main__":

@@ -59,6 +59,13 @@ CREATE TABLE host_roles (id, host_id FK, role, source, created_at);  -- sotto-ti
 CREATE TABLE scans (id, started_at, finished_at, target_count, xml_path, command, status);
 CREATE TABLE cve_cache (cpe TEXT PRIMARY KEY, cve_json TEXT, fetched_at TEXT);  -- cache CVE PER CPE, non per host
 CREATE TABLE host_vulnerabilities (id, host_id FK, port, cpe, cve_id, cvss, url, source, detected_at);
+
+-- Matrice ufficiale MITRE ATT&CK (scaricata da github.com/mitre/cti, cachata localmente)
+CREATE TABLE attack_tactics (shortname TEXT PRIMARY KEY, name, description, url, sort_order);
+CREATE TABLE attack_techniques (technique_id TEXT PRIMARY KEY, name, description, url,
+                                 is_subtechnique INTEGER DEFAULT 0, parent_technique_id, platforms);
+CREATE TABLE attack_technique_tactics (technique_id FK, tactic_shortname FK, PRIMARY KEY (technique_id, tactic_shortname));
+CREATE TABLE host_attack_techniques (id, host_id FK, technique_id, reason, source, detected_at);  -- mappatura euristica
 ```
 
 Tutte le migrazioni devono essere **additive e idempotenti** (`ALTER TABLE
@@ -193,7 +200,40 @@ Orchestratore che:
   o JSON (oggetto `{"<cpe>": [...]}` o lista di record), che fa **merge**
   con la cache esistente per la stessa CPE (non sovrascrive)
 
-### 5. Web UI (Flask + AdminLTE)
+### 5. Mappatura MITRE ATT&CK
+
+- Scarica il dataset ufficiale **MITRE ATT&CK Enterprise** (STIX 2.1,
+  `raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json`,
+  ~47MB) e lo cacha localmente (non riscaricare ad ogni avvio, solo su
+  richiesta esplicita di aggiornamento)
+- Estrai dal bundle STIX: tattiche (`x-mitre-tactic`, 15 in Enterprise),
+  tecniche/sotto-tecniche (`attack-pattern`, **escludendo** quelle
+  `revoked`/`x_mitre_deprecated`), e la relazione N:M tecnica<->tattica
+  (`kill_chain_phases` con `kill_chain_name == "mitre-attack"`). L'ordine
+  delle tattiche (colonne della matrice) segue `tactic_refs` dell'oggetto
+  `x-mitre-matrix`, non un ordine arbitrario/da training
+- **Non inventare ID tecnica a memoria**: verificali sempre contro il
+  dataset scaricato prima di usarli in una regola euristica (gli ID
+  cambiano/vengono deprecati nel tempo, es. la vecchia tattica "Defense
+  Evasion" è oggi divisa in "Stealth" + "Defense Impairment")
+- Regole euristiche **locali** (nessuna chiamata esterna oltre al download
+  della matrice) che mappano porta/servizio esposto, CVE note e tipo
+  dispositivo su tecniche ATT&CK plausibili, es.: porta 3389 aperta ->
+  T1021.001 "Remote Desktop Protocol"; porta 445/SMB -> T1021.002 +
+  T1552 (credenziali) + T1039 (accesso a condivisioni); CVE con CVSS >= 9
+  nota -> T1210 "Exploitation of Remote Services"; device_type contenente
+  "router"/"firewall"/"switch" -> T1599 + T1016. Ogni regola deve essere
+  giustificabile da un'evidenza di scansione reale — **non** aggiungere
+  tecniche "di impatto" (es. ransomware, DoS) senza un segnale concreto,
+  sarebbero solo rumore/falsi allarmi
+- Essendo una computazione locale ed economica, ricalcola la mappatura per
+  **tutti** gli host ad ogni esecuzione (a differenza di classify/vuln non
+  serve un concetto di "solo i nuovi")
+- Vista a **matrice colorata**: colonne = tattiche, celle = tecniche,
+  intensità colore = numero di host esposti a quella tecnica; click su una
+  cella mostra l'elenco degli host coinvolti e il motivo della mappatura
+
+### 6. Web UI (Flask + AdminLTE)
 
 - **Dashboard**: stat box (host totali, servizi aperti, tipi dispositivo
   distinti, batch scansione), stato scansione live (polling), grafico a
@@ -204,13 +244,13 @@ Orchestratore che:
   avviare i job direttamente da qui
 - **Host** (lista): DataTable **server-side** (ordinamento/ricerca/
   paginazione gestiti da query SQL con `LIMIT`/`OFFSET`, non caricando
-  tutto client-side), filtri per tipo dispositivo/famiglia OS dietro un
-  bottone "Filtri" collassabile (non sempre visibili: con centinaia di
-  host la UI deve restare pulita)
+  tutto client-side), filtri per tipo dispositivo/famiglia OS/sistema
+  operativo dietro un bottone "Filtri" collassabile (non sempre visibili:
+  con centinaia di host la UI deve restare pulita)
 - **Host** (dettaglio): tutte le info, editing inline del device_type
   (badge + icona penna + input con datalist di suggerimenti + salva/
   annulla via fetch), sotto-tipi/ruoli AI come badge separati, tabella
-  vulnerabilità note
+  vulnerabilità note, tabella tecniche MITRE ATT&CK mappate con motivo
 - **Servizi**: aggregato per porta/nome, drill-down su "quali host
   espongono questo servizio"
 - **Vulnerabilità**: DataTable con filtro CVSS minimo, colonna "Fonte"
@@ -222,13 +262,21 @@ Orchestratore che:
   host, colori per tipo dispositivo, legenda **collassabile e scrollabile
   con campo di ricerca** (con decine di tipi dispositivo diversi generati
   dall'AI, una legenda a chip inline diventa un muro di testo illeggibile)
-- **Operazioni**: **3 tab** (una per job: aggiorna scansione, classifica AI,
-  scansione vulnerabilità), ciascuna con descrizione, controlli (checkbox
-  `--force` dove rilevante), bottone avvio, badge di stato sulla linguetta
-  stessa, log a piena larghezza/altezza (non colonne strette affiancate)
+- **Matrice ATT&CK**: griglia CSS pura (colonne = tattiche, scroll
+  orizzontale, nessuna libreria matrice/grafo esterna), celle colorate per
+  numero di host esposti, click su una cella apre un modal con l'elenco
+  host e il motivo della mappatura
+- **Operazioni**: **4 tab** (una per job: aggiorna scansione, classifica AI,
+  scansione vulnerabilità, matrice ATT&CK), ciascuna con descrizione,
+  controlli (checkbox `--force` dove rilevante, o il flag CLI equivalente
+  per quel job — es. `--update-matrix` per la matrice ATT&CK, non
+  "riclassificare" ha senso lì), bottone avvio + bottone **interrompi**,
+  badge di stato sulla linguetta stessa, log a piena larghezza/altezza (non
+  colonne strette affiancate)
 - **Log scansioni**: storico batch nmap
 
-Meccanismo comune per i job in background (`rescan`, `classify`, `vuln`):
+Meccanismo comune per i job in background (`rescan`, `classify`, `vuln`,
+`attack`):
 - Ogni script scrive il proprio **PID in un file di lock** all'avvio (via
   context manager tipo `with JobLock(path): ...`) e lo rimuove alla fine
   (anche in caso di eccezione)
@@ -237,14 +285,17 @@ Meccanismo comune per i job in background (`rescan`, `classify`, `vuln`):
   variabile in memoria (non sopravvive all'auto-reload di Flask in debug
   mode) — e pulisce automaticamente i lock "stantii" (PID morto)
 - Endpoint generici `/jobs/<name>/start` (POST, lancia `subprocess.Popen`
-  in background) e `/api/jobs/<name>/status` (GET, stato + tail del log)
-- Un solo blocco JS condiviso (`initJobWidgets`) collega bottone/badge/log
-  di qualsiasi pagina agli endpoint sopra via `data-job="<name>"`, con
-  polling ogni 4s — permette di avere i controlli di un job su più pagine
-  diverse (dashboard, pagina dedicata, pagina del job stesso) senza
-  duplicare la logica
+  in background), `/jobs/<name>/stop` (POST, termina il processo **e
+  l'intero albero di figli** — su Windows `taskkill /F /T /PID <pid>`,
+  perché terminare solo il padre lascia i figli orfani in esecuzione) e
+  `/api/jobs/<name>/status` (GET, stato + tail del log)
+- Un solo blocco JS condiviso (`initJobWidgets`) collega bottone
+  avvio/interrompi/badge/log di qualsiasi pagina agli endpoint sopra via
+  `data-job="<name>"`, con polling ogni 4s — permette di avere i controlli
+  di un job su più pagine diverse (dashboard, pagina dedicata, pagina del
+  job stesso) senza duplicare la logica
 
-### 6. Aspetto
+### 7. Aspetto
 
 - Font **PT Sans Narrow** (Google Fonts) su tutta l'app
 - Toggle **tema chiaro/scuro** persistente (`localStorage`, classe
