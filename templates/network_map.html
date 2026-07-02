@@ -5,16 +5,91 @@
 
 {% block extra_css %}
 <style>
-  #networkMapContainer { width: 100%; background: #fff; border: 1px solid #dee2e6; border-radius: .25rem; overflow: hidden; }
-  #networkMapSvg { display: block; cursor: grab; }
-  .node text { font-size: 11px; fill: #333; }
-  .node--leaf text { font-size: 10.5px; }
-  .node--group path { stroke: #fff; stroke-width: 1.5px; cursor: pointer; }
-  .node--leaf circle { stroke: #fff; stroke-width: 1.5px; cursor: pointer; }
-  .link { fill: none; stroke: #ccd4db; stroke-width: 1.5px; }
-  .legend-item { display: inline-flex; align-items: center; margin: 0 .75rem .5rem 0; cursor: pointer; user-select: none; }
-  .legend-item.is-hidden { opacity: .4; }
-  .legend-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 5px; flex-shrink: 0; }
+  .net-tree, .net-tree ul {
+    list-style: none;
+    margin: 0;
+    padding-left: 1.3rem;
+  }
+  .net-tree {
+    padding-left: 0;
+  }
+  .net-tree li {
+    padding: .15rem 0;
+  }
+  .tree-header {
+    cursor: pointer;
+    display: inline-block;
+    user-select: none;
+  }
+  .tree-toggle {
+    display: inline-block;
+    width: 1.1rem;
+    text-align: center;
+    color: #6c757d;
+  }
+  .tree-group.collapsed > ul {
+    display: none;
+  }
+  .tree-leaf a {
+    color: inherit;
+    text-decoration: none;
+  }
+  .tree-leaf a:hover {
+    text-decoration: underline;
+  }
+  .leaf-dot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    margin-right: 6px;
+  }
+  .tree-count {
+    color: #6c757d;
+    font-size: .85em;
+  }
+  #mapLegend {
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid #dee2e6;
+    border-radius: .25rem;
+    padding: .5rem;
+    background: #f8f9fa;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    padding: .15rem .3rem;
+    margin-bottom: 2px;
+    cursor: pointer;
+    user-select: none;
+    border-radius: .2rem;
+  }
+  .legend-item:hover {
+    background: rgba(0,0,0,.05);
+  }
+  .legend-item.is-hidden {
+    opacity: .4;
+  }
+  .legend-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 6px;
+    flex-shrink: 0;
+  }
+  .legend-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1 1 auto;
+  }
+  .legend-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 2px;
+  }
 </style>
 {% endblock %}
 
@@ -25,238 +100,200 @@
     <div class="card-tools">
       <button id="expandAllBtn" class="btn btn-sm btn-outline-secondary"><i class="fas fa-expand-alt"></i> Espandi tutto</button>
       <button id="collapseAllBtn" class="btn btn-sm btn-outline-secondary"><i class="fas fa-compress-alt"></i> Comprimi tutto</button>
-      <button id="resetZoomBtn" class="btn btn-sm btn-outline-secondary"><i class="fas fa-crosshairs"></i> Centra</button>
     </div>
   </div>
   <div class="card-body">
     <p class="text-muted small mb-2">
-      Clicca su un nodo <strong>sito</strong> o <strong>subnet</strong> (diamante grigio) per espandere/comprimere i suoi figli.
-      Clicca su un host (cerchio colorato) per aprirne la scheda di dettaglio. Rotellina = zoom, drag = pan.
-      Clicca sui tipi in legenda per mostrarli/nasconderli sulla mappa.
+      Clicca su un nodo <strong>sito</strong> o <strong>subnet</strong> per espandere/comprimere.
+      Clicca su un host per aprirne la scheda di dettaglio.
     </p>
-    <div class="mb-2">
-      <button id="legendAllBtn" class="btn btn-xs btn-link p-0 mr-3">mostra tutti</button>
-      <button id="legendNoneBtn" class="btn btn-xs btn-link p-0">nascondi tutti</button>
+
+    <button type="button" class="btn btn-sm btn-outline-secondary mb-2" data-toggle="collapse" data-target="#legendPanel">
+      <i class="fas fa-filter"></i> Filtra per tipo dispositivo (<span id="legendActiveCount">0</span> visibili)
+    </button>
+    <div class="collapse mb-3" id="legendPanel">
+      <div class="card card-body p-2">
+        <div class="row mb-2">
+          <div class="col-md-6">
+            <input type="text" id="legendSearch" class="form-control form-control-sm" placeholder="Cerca tipo...">
+          </div>
+          <div class="col-md-6 text-md-right">
+            <button id="legendAllBtn" class="btn btn-xs btn-link p-0 mr-3">mostra tutti</button>
+            <button id="legendNoneBtn" class="btn btn-xs btn-link p-0">nascondi tutti</button>
+          </div>
+        </div>
+        <div id="mapLegend"></div>
+      </div>
     </div>
-    <div id="mapLegend" class="mb-3"></div>
+
     <div id="loadingIndicator" class="text-muted"><i class="fas fa-spinner fa-spin"></i> Caricamento mappa...</div>
-    <div id="networkMapContainer" style="height: 75vh; display:none;">
-      <svg id="networkMapSvg" width="100%" height="100%"></svg>
-    </div>
+    <ul id="networkTree" class="net-tree" style="display:none;"></ul>
   </div>
 </div>
 {% endblock %}
 
 {% block extra_js %}
-<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
 <script>
-fetch("{{ url_for('api_network_map') }}")
-  .then(r => r.json())
-  .then(rawData => {
-    document.getElementById('loadingIndicator').style.display = 'none';
-    document.getElementById('networkMapContainer').style.display = 'block';
-    initMap(rawData);
-  });
+let rawData = null;
+const hiddenTypes = new Set();
+const groupNodesById = new Map();
+const groupCountEls = new Map();
 
-function initMap(rawData) {
-  const container = document.getElementById('networkMapContainer');
-  const svgEl = document.getElementById('networkMapSvg');
-  const svg = d3.select(svgEl);
-  const g = svg.append('g');
+function nodeId(node) {
+  return node.ip || node.name;
+}
 
-  const zoom = d3.zoom().scaleExtent([0.1, 4]).on('zoom', (event) => {
-    g.attr('transform', event.transform);
-  });
-  svg.call(zoom);
+function countLeaves(node) {
+  if (node.leaf) return 1;
+  return (node.children || []).reduce((s, c) => s + countLeaves(c), 0);
+}
 
-  const dx = 20;
-  const dy = 190;
-  const treeLayout = d3.tree().nodeSize([dx, dy]);
-  const diamond = d3.symbol().type(d3.symbolDiamond).size(90)();
+function countVisible(node) {
+  if (node.leaf) return hiddenTypes.has(node.device_type || 'unknown') ? 0 : 1;
+  return (node.children || []).reduce((s, c) => s + countVisible(c), 0);
+}
 
-  const expandedIds = new Set();
-  const hiddenTypes = new Set();
+function buildNode(node, depth) {
+  const li = document.createElement('li');
 
-  // Raccoglie i tipi dispositivo presenti nei dati (con colore e conteggio) per la legenda.
-  function collectDeviceTypes(node, acc) {
+  if (node.leaf) {
+    li.className = 'tree-leaf';
+    li.dataset.type = node.device_type || 'unknown';
+    const label = node.hostname ? `${node.ip} (${node.hostname})` : node.ip;
+    li.innerHTML =
+      `<span class="leaf-dot" style="background:${node.color || '#adb5bd'}"></span>` +
+      `<a href="/hosts/${encodeURIComponent(node.ip)}">${label}</a>`;
+    return li;
+  }
+
+  const id = nodeId(node);
+  groupNodesById.set(id, node);
+
+  const collapsedByDefault = depth >= 2;
+  li.className = 'tree-group' + (collapsedByDefault ? ' collapsed' : '');
+  li.dataset.id = id;
+  li.dataset.depth = depth;
+
+  const header = document.createElement('div');
+  header.className = 'tree-header';
+  const total = countLeaves(node);
+  header.innerHTML =
+    `<span class="tree-toggle"><i class="fas fa-caret-${collapsedByDefault ? 'right' : 'down'}"></i></span>` +
+    `<strong>${node.name}</strong> <span class="tree-count">(${total})</span>`;
+  header.addEventListener('click', () => toggleGroup(li));
+  li.appendChild(header);
+  groupCountEls.set(id, header.querySelector('.tree-count'));
+
+  const ul = document.createElement('ul');
+  (node.children || []).forEach(child => ul.appendChild(buildNode(child, depth + 1)));
+  li.appendChild(ul);
+  return li;
+}
+
+function toggleGroup(li) {
+  li.classList.toggle('collapsed');
+  const icon = li.querySelector('.tree-header .tree-toggle i');
+  icon.className = 'fas fa-caret-' + (li.classList.contains('collapsed') ? 'right' : 'down');
+}
+
+let legendTypesCache = null;
+
+function computeLegendTypes() {
+  const types = {};
+  (function walk(node) {
     if (node.leaf) {
       const key = node.device_type || 'unknown';
-      if (!acc[key]) acc[key] = { color: node.color, count: 0 };
-      acc[key].count++;
+      if (!types[key]) types[key] = { color: node.color, count: 0 };
+      types[key].count++;
     } else {
-      (node.children || []).forEach(c => collectDeviceTypes(c, acc));
+      (node.children || []).forEach(walk);
     }
-    return acc;
-  }
+  })(rawData);
+  return Object.entries(types).sort((a, b) => b[1].count - a[1].count);
+}
 
-  // Filtra l'albero rimuovendo gli host dei tipi nascosti e i gruppi che restano vuoti.
-  function filterTree(node) {
-    if (node.leaf) {
-      return hiddenTypes.has(node.device_type || 'unknown') ? null : node;
-    }
-    const children = (node.children || []).map(filterTree).filter(Boolean);
-    if (!children.length) return null;
-    return { ...node, children, count: children.reduce((s, c) => s + (c.count ?? 1), 0) };
-  }
+function updateActiveCount() {
+  const total = legendTypesCache ? legendTypesCache.length : 0;
+  document.getElementById('legendActiveCount').textContent = (total - hiddenTypes.size) + '/' + total;
+}
 
-  function buildRoot() {
-    const filtered = filterTree(rawData) || { name: rawData.name, children: [], count: 0 };
-    const h = d3.hierarchy(filtered, d => d.children);
-    h.each(d => {
-      d.data.__id = d.data.ip || d.data.name;
-      if (d.depth >= 2 && d.children && !expandedIds.has(d.data.__id)) {
-        d._children = d.children;
-        d.children = null;
-      }
+function renderLegend() {
+  if (!legendTypesCache) legendTypesCache = computeLegendTypes();
+  const query = (document.getElementById('legendSearch').value || '').toLowerCase();
+
+  const legend = document.getElementById('mapLegend');
+  legend.innerHTML = '';
+  const list = document.createElement('div');
+  list.className = 'legend-list';
+
+  const filtered = legendTypesCache.filter(([type]) => type.toLowerCase().includes(query));
+  if (!filtered.length) {
+    list.innerHTML = '<div class="text-muted small p-2">Nessun tipo corrisponde alla ricerca.</div>';
+  }
+  filtered.forEach(([type, info]) => {
+    const item = document.createElement('div');
+    item.className = 'legend-item' + (hiddenTypes.has(type) ? ' is-hidden' : '');
+    item.title = type;
+    item.innerHTML =
+      `<span class="legend-dot" style="background:${info.color}"></span>` +
+      `<span class="legend-label">${type}</span>&nbsp;<span class="text-muted">(${info.count})</span>`;
+    item.addEventListener('click', () => {
+      if (hiddenTypes.has(type)) hiddenTypes.delete(type);
+      else hiddenTypes.add(type);
+      item.classList.toggle('is-hidden');
+      updateActiveCount();
+      applyFilter();
     });
-    h.x0 = 0;
-    h.y0 = 0;
-    return h;
-  }
-
-  function diagonal(s, t) {
-    return `M${s.y},${s.x} C${(s.y + t.y) / 2},${s.x} ${(s.y + t.y) / 2},${t.x} ${t.y},${t.x}`;
-  }
-
-  let root = buildRoot();
-
-  function update(source) {
-    treeLayout(root);
-    const nodes = root.descendants();
-    const links = root.links();
-
-    let minX = Infinity, maxX = -Infinity, maxDepth = 0;
-    nodes.forEach(d => {
-      if (d.x < minX) minX = d.x;
-      if (d.x > maxX) maxX = d.x;
-      if (d.depth > maxDepth) maxDepth = d.depth;
-    });
-    const height = Math.max(300, maxX - minX + 80);
-    const width = Math.max(container.clientWidth, 160 + (maxDepth + 1) * dy + 260);
-    svg.attr('viewBox', [-40, minX - 40, width, height]);
-
-    const node = g.selectAll('g.node')
-      .data(nodes, d => d.data.__id);
-
-    const nodeEnter = node.enter().append('g')
-      .attr('class', d => 'node ' + (d.data.leaf ? 'node--leaf' : 'node--group'))
-      .attr('transform', () => `translate(${source.y0 ?? 0},${source.x0 ?? 0})`)
-      .style('opacity', 0)
-      .on('click', (event, d) => {
-        if (d.data.leaf) {
-          window.location.href = "/hosts/" + encodeURIComponent(d.data.ip);
-          return;
-        }
-        if (d.children) { d._children = d.children; d.children = null; expandedIds.delete(d.data.__id); }
-        else { d.children = d._children; d._children = null; expandedIds.add(d.data.__id); }
-        update(d);
-      });
-
-    nodeEnter.filter(d => d.data.leaf).append('circle')
-      .attr('r', 6);
-
-    nodeEnter.filter(d => !d.data.leaf).append('path')
-      .attr('d', diamond);
-
-    nodeEnter.append('text')
-      .attr('dy', '0.31em')
-      .attr('x', d => d.data.leaf ? 11 : -11)
-      .attr('text-anchor', d => d.data.leaf ? 'start' : 'end')
-      .text(d => d.data.leaf
-        ? (d.data.hostname ? `${d.data.ip} (${d.data.hostname})` : d.data.ip)
-        : `${d.data.name} (${d.data.count})`);
-
-    const nodeMerge = node.merge(nodeEnter);
-    nodeMerge.transition().duration(300)
-      .attr('transform', d => `translate(${d.y},${d.x})`)
-      .style('opacity', 1);
-    nodeMerge.select('circle').attr('fill', d => d.data.color || '#c9ccd1');
-    nodeMerge.select('path').attr('fill', d => d._children ? '#6c757d' : '#343a40');
-
-    node.exit().transition().duration(300)
-      .attr('transform', () => `translate(${source.y},${source.x})`)
-      .style('opacity', 0)
-      .remove();
-
-    const link = g.selectAll('path.link')
-      .data(links, d => d.target.data.__id);
-
-    const linkEnter = link.enter().insert('path', 'g')
-      .attr('class', 'link')
-      .attr('d', () => {
-        const o = { x: source.x0 ?? 0, y: source.y0 ?? 0 };
-        return diagonal(o, o);
-      });
-
-    link.merge(linkEnter).transition().duration(300)
-      .attr('d', d => diagonal(d.source, d.target));
-
-    link.exit().transition().duration(300)
-      .attr('d', () => {
-        const o = { x: source.x, y: source.y };
-        return diagonal(o, o);
-      })
-      .remove();
-
-    nodes.forEach(d => { d.x0 = d.x; d.y0 = d.y; });
-  }
-
-  function renderLegend() {
-    const types = collectDeviceTypes(rawData, {});
-    const legend = document.getElementById('mapLegend');
-    legend.innerHTML = '';
-    Object.entries(types)
-      .sort((a, b) => b[1].count - a[1].count)
-      .forEach(([type, info]) => {
-        const item = document.createElement('span');
-        item.className = 'legend-item' + (hiddenTypes.has(type) ? ' is-hidden' : '');
-        item.dataset.type = type;
-        item.innerHTML = `<span class="legend-dot" style="background:${info.color}"></span>${type} (${info.count})`;
-        item.addEventListener('click', () => {
-          if (hiddenTypes.has(type)) hiddenTypes.delete(type);
-          else hiddenTypes.add(type);
-          item.classList.toggle('is-hidden');
-          root = buildRoot();
-          update(root);
-        });
-        legend.appendChild(item);
-      });
-  }
-
-  renderLegend();
-  update(root);
-
-  const initialTransform = d3.zoomIdentity.translate(20, container.clientHeight / 2).scale(1);
-  svg.call(zoom.transform, initialTransform);
-
-  document.getElementById('expandAllBtn').addEventListener('click', () => {
-    root.descendants().forEach(d => {
-      if (d._children) { d.children = d._children; d._children = null; expandedIds.add(d.data.__id); }
-    });
-    update(root);
+    list.appendChild(item);
   });
-  document.getElementById('collapseAllBtn').addEventListener('click', () => {
-    root.descendants().forEach(d => {
-      if (d.depth >= 2 && d.children) { d._children = d.children; d.children = null; expandedIds.delete(d.data.__id); }
-    });
-    update(root);
+
+  legend.appendChild(list);
+  updateActiveCount();
+}
+
+function applyFilter() {
+  document.querySelectorAll('#networkTree .tree-leaf').forEach(li => {
+    li.style.display = hiddenTypes.has(li.dataset.type) ? 'none' : '';
   });
-  document.getElementById('resetZoomBtn').addEventListener('click', () => {
-    svg.transition().duration(300).call(zoom.transform, initialTransform);
-  });
-  document.getElementById('legendAllBtn').addEventListener('click', () => {
-    hiddenTypes.clear();
-    root = buildRoot();
-    update(root);
-    renderLegend();
-  });
-  document.getElementById('legendNoneBtn').addEventListener('click', () => {
-    const types = collectDeviceTypes(rawData, {});
-    Object.keys(types).forEach(t => hiddenTypes.add(t));
-    root = buildRoot();
-    update(root);
-    renderLegend();
+  groupCountEls.forEach((el, id) => {
+    const node = groupNodesById.get(id);
+    const total = countLeaves(node);
+    const visible = countVisible(node);
+    el.textContent = visible === total ? `(${total})` : `(${visible}/${total})`;
   });
 }
+
+fetch("{{ url_for('api_network_map') }}")
+  .then(r => r.json())
+  .then(data => {
+    rawData = data;
+    document.getElementById('loadingIndicator').style.display = 'none';
+    const tree = document.getElementById('networkTree');
+    tree.appendChild(buildNode(rawData, 0));
+    tree.style.display = 'block';
+    renderLegend();
+  });
+
+document.getElementById('expandAllBtn').addEventListener('click', () => {
+  document.querySelectorAll('#networkTree .tree-group.collapsed').forEach(li => toggleGroup(li));
+});
+document.getElementById('collapseAllBtn').addEventListener('click', () => {
+  document.querySelectorAll('#networkTree .tree-group').forEach(li => {
+    const shouldCollapse = parseInt(li.dataset.depth, 10) >= 2;
+    if (shouldCollapse && !li.classList.contains('collapsed')) toggleGroup(li);
+    if (!shouldCollapse && li.classList.contains('collapsed')) toggleGroup(li);
+  });
+});
+document.getElementById('legendAllBtn').addEventListener('click', () => {
+  hiddenTypes.clear();
+  renderLegend();
+  applyFilter();
+});
+document.getElementById('legendNoneBtn').addEventListener('click', () => {
+  (legendTypesCache || []).forEach(([type]) => hiddenTypes.add(type));
+  renderLegend();
+  applyFilter();
+});
+document.getElementById('legendSearch').addEventListener('input', renderLegend);
 </script>
 {% endblock %}

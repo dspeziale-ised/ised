@@ -104,6 +104,22 @@ def is_nmap_running():
         return False
 
 
+def is_scan_and_store_running():
+    """True solo se il processo scan_and_store.py di QUESTO progetto è
+    attivo — a differenza di is_nmap_running(), non viene ingannato da un
+    nmap.exe indipendente (es. una ping-sweep lanciata a mano dall'utente)."""
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process -Filter \"Name LIKE '%python%'\" "
+             "| Select-Object -ExpandProperty CommandLine"],
+            capture_output=True, text=True, timeout=8,
+        )
+        return "scan_and_store.py" in out.stdout
+    except Exception:
+        return False
+
+
 def is_pid_alive(pid):
     try:
         out = subprocess.run(
@@ -151,9 +167,10 @@ _job_processes = {}
 def is_job_running(name):
     """True se il job è già attivo. Verificato tramite lock file con PID
     (sopravvive ai riavvii del processo Flask, es. per l'auto-reload in
-    debug mode) e, per i job che usano nmap, anche tramite processo
-    nmap.exe attivo (copre scansioni avviate fuori da questo meccanismo,
-    es. da riga di comando)."""
+    debug mode) e, per il job 'rescan', anche tramite il processo
+    scan_and_store.py (copre scansioni avviate fuori da questo meccanismo,
+    es. da riga di comando) — non un generico nmap.exe, per non confondersi
+    con scansioni nmap indipendenti (es. una ping-sweep lanciata a mano)."""
     job = JOBS[name]
     proc = _job_processes.get(name)
     if proc is not None and proc.poll() is None:
@@ -172,7 +189,7 @@ def is_job_running(name):
         except OSError:
             pass
 
-    return is_nmap_running() if job["uses_nmap"] else False
+    return is_scan_and_store_running() if job["uses_nmap"] else False
 
 
 def start_job(name, extra_args=None):
@@ -221,7 +238,7 @@ def get_scan_progress():
 
     batches_expected = math.ceil(total_ips / avg_batch_size) if avg_batch_size and total_ips else 0
     percent = round(min(hosts_recorded, total_ips) / total_ips * 100, 1) if total_ips else 0.0
-    running = is_nmap_running()
+    running = is_scan_and_store_running()
 
     eta_seconds = None
     if running and avg_duration and batches_expected > batches_done:
