@@ -7,11 +7,17 @@ import os
 import sqlite3
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
-from flask import Flask, abort, g, jsonify, redirect, render_template, request, url_for
+from flask import Flask, Response, abort, g, jsonify, redirect, render_template, request, url_for
 
 import cve_lookup
+import notify_gmail
+import notify_telegram
+import report_generator
+import report_schedule
 import scanner_db
 
 BASE_DIR = Path(__file__).parent
@@ -377,6 +383,12 @@ def admin_panel():
         data_dir=str(DATA_DIR),
         input_ip_count=count_input_ips(),
         jobs_running={name: is_job_running(name) for name in JOBS},
+        notify_status={
+            "telegram_configured": notify_telegram.is_configured(),
+            "gmail_configured": notify_gmail.is_configured(),
+            "gmail_default_to": notify_gmail.default_recipient() or "",
+        },
+        report_schedule_config=report_schedule.load(),
     )
 
 
@@ -1061,5 +1073,130 @@ def api_attack_technique_hosts(technique_id):
     })
 
 
+REPORT_KIND_CHOICES = ("summary", "hosts")
+
+
+def _clean_kinds(values):
+    kinds = tuple(k for k in values if k in REPORT_KIND_CHOICES)
+    return kinds or REPORT_KIND_CHOICES
+
+
+@app.route("/reports/generate")
+def reports_generate():
+    kinds = _clean_kinds(request.args.get("kinds", "summary,hosts").split(","))
+    db = get_db()
+    pdf_bytes = report_generator.generate_report_pdf(db, kinds=kinds)
+    filename = report_generator.default_filename()
+    return Response(
+        pdf_bytes, mimetype="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@app.route("/reports/send", methods=["POST"])
+def reports_send():
+    kinds = _clean_kinds(request.form.getlist("kinds"))
+    db = get_db()
+    pdf_bytes = report_generator.generate_report_pdf(db, kinds=kinds)
+    filename = report_generator.default_filename()
+
+    results = {}
+    if request.form.get("telegram") == "1":
+        try:
+            notify_telegram.send_document(pdf_bytes, filename, caption="Report inventario di rete - ised.net")
+            results["telegram"] = {"ok": True}
+        except notify_telegram.TelegramError as e:
+            results["telegram"] = {"ok": False, "error": str(e)}
+    if request.form.get("gmail") == "1":
+        try:
+            notify_gmail.send_document(pdf_bytes, filename, to_address=request.form.get("gmail_to") or None)
+            results["gmail"] = {"ok": True}
+        except notify_gmail.GmailError as e:
+            results["gmail"] = {"ok": False, "error": str(e)}
+
+    ok = bool(results) and all(r["ok"] for r in results.values())
+    return jsonify({"ok": ok, "results": results})
+
+
+@app.route("/api/notify-status")
+def api_notify_status():
+    return jsonify({
+        "telegram_configured": notify_telegram.is_configured(),
+        "gmail_configured": notify_gmail.is_configured(),
+        "gmail_default_to": notify_gmail.default_recipient() or "",
+    })
+
+
+@app.route("/api/report-schedule", methods=["GET", "POST"])
+def api_report_schedule():
+    if request.method == "POST":
+        existing = report_schedule.load()
+        config = {
+            "enabled": request.form.get("enabled") == "1",
+            "interval_hours": request.form.get("interval_hours", type=int) or 24,
+            "kinds": list(_clean_kinds(request.form.getlist("kinds"))),
+            "send_telegram": request.form.get("send_telegram") == "1",
+            "send_gmail": request.form.get("send_gmail") == "1",
+            "gmail_to": (request.form.get("gmail_to") or "").strip(),
+            "last_sent_at": existing.get("last_sent_at"),
+        }
+        report_schedule.save(config)
+    return jsonify(report_schedule.load())
+
+
+def run_scheduled_report_if_due():
+    """Se la schedulazione è attiva ed è trascorso l'intervallo configurato,
+    genera il report e lo invia ai canali abilitati. Chiamato periodicamente
+    dal thread avviato in start_report_scheduler()."""
+    config = report_schedule.load()
+    now = datetime.datetime.now()
+    if not report_schedule.is_due(config, now):
+        return
+
+    conn = scanner_db.connect(str(DB_PATH))
+    try:
+        pdf_bytes = report_generator.generate_report_pdf(conn, kinds=_clean_kinds(config.get("kinds") or []))
+    finally:
+        conn.close()
+    filename = report_generator.default_filename()
+
+    errors = []
+    if config.get("send_telegram"):
+        try:
+            notify_telegram.send_document(pdf_bytes, filename, caption="Report periodico inventario di rete")
+        except notify_telegram.TelegramError as e:
+            errors.append(f"Telegram: {e}")
+    if config.get("send_gmail"):
+        try:
+            notify_gmail.send_document(pdf_bytes, filename, to_address=config.get("gmail_to") or None)
+        except notify_gmail.GmailError as e:
+            errors.append(f"Gmail: {e}")
+
+    report_schedule.mark_sent(now)
+    if errors:
+        print("[report-scheduler] invio con errori: " + "; ".join(errors))
+
+
+def _report_scheduler_loop():
+    while True:
+        try:
+            run_scheduled_report_if_due()
+        except Exception as e:
+            print(f"[report-scheduler] errore inatteso: {e}")
+        time.sleep(900)  # controlla ogni 15 minuti se la schedulazione è "due"
+
+
+def start_report_scheduler():
+    """Avvia il thread di controllo della schedulazione, una sola volta —
+    con il reloader di Flask in debug mode lo script viene eseguito anche da
+    un processo "watcher" che non serve mai richieste: WERKZEUG_RUN_MAIN è
+    'true' solo nel processo figlio che effettivamente gira, quindi è la
+    guardia giusta per non avviare due thread duplicati."""
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not APP_DEBUG:
+        threading.Thread(target=_report_scheduler_loop, daemon=True).start()
+
+
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5200, debug=True)
+    APP_DEBUG = True
+    start_report_scheduler()
+    app.run(host="127.0.0.1", port=5200, debug=APP_DEBUG)
