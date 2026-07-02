@@ -50,14 +50,23 @@
 <div class="card card-outline card-secondary">
   <div class="card-header"><h3 class="card-title"><i class="fas fa-bolt"></i> Azioni rapide</h3></div>
   <div class="card-body">
-    <button type="button" class="btn btn-primary job-start-btn mr-2" data-job="rescan">
+    <button type="button" class="btn btn-primary job-start-btn mr-1" data-job="rescan">
       <i class="fas fa-sync-alt"></i> Aggiorna scansione
     </button>
-    <button type="button" class="btn btn-success job-start-btn mr-2" data-job="classify">
+    <button type="button" class="btn btn-outline-danger job-stop-btn mr-2" data-job="rescan" style="display:none;">
+      <i class="fas fa-stop"></i>
+    </button>
+    <button type="button" class="btn btn-success job-start-btn mr-1" data-job="classify">
       <i class="fas fa-robot"></i> Classifica con AI
     </button>
-    <button type="button" class="btn btn-danger job-start-btn mr-2" data-job="vuln">
+    <button type="button" class="btn btn-outline-danger job-stop-btn mr-2" data-job="classify" style="display:none;">
+      <i class="fas fa-stop"></i>
+    </button>
+    <button type="button" class="btn btn-danger job-start-btn mr-1" data-job="vuln">
       <i class="fas fa-bug"></i> Scansiona vulnerabilità
+    </button>
+    <button type="button" class="btn btn-outline-danger job-stop-btn mr-2" data-job="vuln" style="display:none;">
+      <i class="fas fa-stop"></i>
     </button>
     <span class="badge job-status-badge mr-1" data-job="rescan"></span>
     <span class="badge job-status-badge mr-1" data-job="classify"></span>

@@ -208,6 +208,42 @@ def start_job(name, extra_args=None):
     return True, None
 
 
+def stop_job(name):
+    """Termina il job in corso, compreso l'intero albero di processi figli
+    (es. nmap lanciato da scan_and_store.py) tramite 'taskkill /T' — su
+    Windows terminare solo il processo padre non termina i figli."""
+    job = JOBS[name]
+    pid = None
+
+    proc = _job_processes.get(name)
+    if proc is not None and proc.poll() is None:
+        pid = proc.pid
+    elif job["lock_file"].exists():
+        try:
+            pid = int(job["lock_file"].read_text(encoding="utf-8").strip())
+        except (ValueError, OSError):
+            pid = None
+
+    if not pid or not is_pid_alive(pid):
+        return False, f"{job['label']}: nessun processo attivo trovato."
+
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            capture_output=True, text=True, timeout=15,
+        )
+    except Exception as e:
+        return False, f"Errore durante l'arresto: {e}"
+
+    try:
+        job["lock_file"].unlink(missing_ok=True)
+    except OSError:
+        pass
+    _job_processes.pop(name, None)
+
+    return True, None
+
+
 def tail_log(log_file, max_lines=200):
     if not Path(log_file).exists():
         return ""
@@ -297,6 +333,14 @@ def job_start(name):
     extra_args = ["--force"] if request.values.get("force") == "1" else None
     ok, reason = start_job(name, extra_args=extra_args)
     return jsonify({"started": ok, "reason": reason})
+
+
+@app.route("/jobs/<name>/stop", methods=["POST"])
+def job_stop(name):
+    if name not in JOBS:
+        return jsonify({"stopped": False, "reason": "Job sconosciuto."}), 404
+    ok, reason = stop_job(name)
+    return jsonify({"stopped": ok, "reason": reason})
 
 
 @app.route("/api/jobs/<name>/status")

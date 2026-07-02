@@ -87,12 +87,33 @@ def fetch_vulners_output(ip, port, timeout=90):
     return None
 
 
+def fetch_cves(cpe, rep_ip, rep_port, use_nvd=True):
+    """Cerca le CVE per una CPE: prima l'API NVD (diretta, nessuna
+    scansione dal vivo), poi nmap --script vulners come fallback se NVD
+    non risponde o non trova nulla. Ritorna (cve_list, source)."""
+    if use_nvd:
+        try:
+            cves = nvd_client.fetch_cves_for_cpe(cpe)
+            if cves:
+                return cves, "nvd"
+            print(f"  NVD: nessuna CVE per {cpe}, provo vulners come conferma...")
+        except nvd_client.NvdError as e:
+            print(f"  [!] NVD non disponibile per {cpe} ({e}), passo a vulners...")
+
+    print(f"Lookup CVE per {cpe} via nmap/vulners (host {rep_ip}:{rep_port})...")
+    output = fetch_vulners_output(rep_ip, rep_port)
+    return (cve_lookup.parse_vulners_output(output) if output else []), "vulners"
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--force", action="store_true", help="Riesegue il lookup anche per CPE già in cache")
     parser.add_argument("--max-age-days", type=int, default=30, help="Validità della cache CVE in giorni")
     parser.add_argument("--limit", type=int, help="Limita il numero di CPE da elaborare (per test)")
+    parser.add_argument("--no-nvd", action="store_true", help="Salta l'API NVD, usa solo nmap/vulners")
     args = parser.parse_args()
+    use_nvd = not args.no_nvd
+    nvd_sleep = NVD_SLEEP_WITH_KEY if nvd_client.has_api_key() else NVD_SLEEP_NO_KEY
 
     with JobLock(LOCK_FILE):
         conn = scanner_db.connect(str(DB_PATH))
@@ -102,6 +123,9 @@ def main():
         groups = build_cpe_groups(conn)
         print(f"{len(groups)} CPE distinte trovate tra i servizi scansionati "
               f"(su {sum(len(v) for v in groups.values())} servizio/host totali).")
+        if use_nvd:
+            print(f"Fonte primaria: API NVD ({'con' if nvd_client.has_api_key() else 'senza'} "
+                  f"API key, pausa {nvd_sleep}s tra le richieste).")
 
         items = list(groups.items())
         if args.limit:
@@ -110,14 +134,16 @@ def main():
         cached_hits = 0
         fresh_lookups = 0
         total_cves_assigned = 0
+        sources = {}
 
         for cpe, host_ports in items:
             rep_host_id, rep_ip, rep_port = host_ports[0]
+            source_holder = {}
 
             def fetch():
-                print(f"Lookup CVE per {cpe} (via {rep_ip}:{rep_port})...")
-                output = fetch_vulners_output(rep_ip, rep_port)
-                return cve_lookup.parse_vulners_output(output) if output else []
+                cve_list, source = fetch_cves(cpe, rep_ip, rep_port, use_nvd=use_nvd)
+                source_holder["source"] = source
+                return cve_list
 
             if args.force:
                 cve_list = fetch()
@@ -128,22 +154,28 @@ def main():
                     conn, cpe, fetch, max_age_days=args.max_age_days
                 )
 
+            source = source_holder.get("source", "cache")
             if from_cache:
                 cached_hits += 1
             else:
                 fresh_lookups += 1
+                sources[source] = sources.get(source, 0) + 1
+                if use_nvd and source == "nvd":
+                    time.sleep(nvd_sleep)
 
             for host_id, ip, port in host_ports:
-                scanner_db.set_host_vulnerabilities(conn, host_id, port, cpe, cve_list, source="vulners")
+                scanner_db.set_host_vulnerabilities(conn, host_id, port, cpe, cve_list, source=source)
             total_cves_assigned += len(cve_list) * len(host_ports)
 
-            tag = "(cache)" if from_cache else "(nuovo)"
+            tag = "(cache)" if from_cache else f"(nuovo, {source})"
             if cve_list:
                 print(f"  {cpe} {tag}: {len(cve_list)} CVE -> applicate a {len(host_ports)} host/porta")
             else:
                 print(f"  {cpe} {tag}: nessuna CVE nota")
 
         conn.close()
+        if sources:
+            print(f"\nFonti usate per i lookup nuovi: {sources}")
         print(
             f"\nCompletato: {len(items)} CPE elaborate "
             f"({fresh_lookups} lookup nuovi, {cached_hits} da cache), "

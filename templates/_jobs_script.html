@@ -1,6 +1,7 @@
 function initJobWidgets(jobs) {
   Object.keys(jobs).forEach(function (name) {
     const btn = document.querySelector('.job-start-btn[data-job="' + name + '"]');
+    const stopBtn = document.querySelector('.job-stop-btn[data-job="' + name + '"]');
     const badge = document.querySelector('.job-status-badge[data-job="' + name + '"]');
     const logEl = document.querySelector('.job-log[data-job="' + name + '"]');
     const cfg = jobs[name] || {};
@@ -20,6 +21,7 @@ function initJobWidgets(jobs) {
         .then(function (d) {
           setBadge(d.running);
           if (btn) btn.disabled = d.running;
+          if (stopBtn) stopBtn.style.display = d.running ? 'inline-block' : 'none';
           if (logEl && typeof d.log === 'string') {
             const atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 10;
             logEl.textContent = d.log || '(nessun log ancora)';
@@ -42,6 +44,23 @@ function initJobWidgets(jobs) {
             refreshStatus();
           })
           .catch(function () { alert('Errore di rete.'); btn.disabled = false; });
+      });
+    }
+
+    if (stopBtn) {
+      stopBtn.addEventListener('click', function () {
+        if (!confirm('Interrompere questa operazione? I dati già salvati restano nel database; il resto del batch corrente andrà rifatto al prossimo avvio.')) {
+          return;
+        }
+        stopBtn.disabled = true;
+        fetch('/jobs/' + name + '/stop', { method: 'POST' })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (!d.stopped) { alert(d.reason || 'Non interrotto.'); }
+            stopBtn.disabled = false;
+            refreshStatus();
+          })
+          .catch(function () { alert('Errore di rete.'); stopBtn.disabled = false; });
       });
     }
 

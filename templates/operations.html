@@ -67,6 +67,9 @@
         <button class="btn btn-primary job-start-btn mb-3" data-job="rescan" {{ 'disabled' if jobs_running.rescan else '' }}>
           <i class="fas fa-play"></i> Avvia
         </button>
+        <button class="btn btn-outline-danger job-stop-btn mb-3" data-job="rescan" style="{{ '' if jobs_running.rescan else 'display:none;' }}">
+          <i class="fas fa-stop"></i> Interrompi
+        </button>
         <h6 class="text-muted">Log</h6>
         <pre class="op-log job-log" data-job="rescan"></pre>
       </div>
@@ -85,14 +88,19 @@
         <button class="btn btn-success job-start-btn mb-3" data-job="classify" {{ 'disabled' if jobs_running.classify else '' }}>
           <i class="fas fa-play"></i> Avvia
         </button>
+        <button class="btn btn-outline-danger job-stop-btn mb-3" data-job="classify" style="{{ '' if jobs_running.classify else 'display:none;' }}">
+          <i class="fas fa-stop"></i> Interrompi
+        </button>
         <h6 class="text-muted">Log</h6>
         <pre class="op-log job-log" data-job="classify"></pre>
       </div>
 
       <div class="tab-pane fade" id="tab-vuln" role="tabpanel">
         <p class="small">
-          Cerca CVE per le CPE rilevate (nmap --script vulners), con cache per CPE per non
-          ripetere lookup sulla stessa combinazione prodotto/versione.
+          Scarica le CVE note per le CPE rilevate direttamente dall'<strong>NVD</strong>
+          (National Vulnerability Database, database ufficiale), con <code>nmap --script vulners</code>
+          come fallback se NVD non risponde. Cache per CPE per non ripetere lookup sulla stessa
+          combinazione prodotto/versione.
         </p>
         <div class="form-check mb-2">
           <input type="checkbox" class="form-check-input" id="vulnForceCheck">
@@ -102,6 +110,9 @@
         </div>
         <button class="btn btn-danger job-start-btn mb-3" data-job="vuln" {{ 'disabled' if jobs_running.vuln else '' }}>
           <i class="fas fa-play"></i> Avvia
+        </button>
+        <button class="btn btn-outline-danger job-stop-btn mb-3" data-job="vuln" style="{{ '' if jobs_running.vuln else 'display:none;' }}">
+          <i class="fas fa-stop"></i> Interrompi
         </button>
 
         <hr>

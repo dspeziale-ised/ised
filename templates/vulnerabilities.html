@@ -50,6 +50,9 @@
       <button type="button" class="btn btn-sm btn-danger job-start-btn" data-job="vuln">
         <i class="fas fa-bug"></i> Scansiona vulnerabilità
       </button>
+      <button type="button" class="btn btn-sm btn-outline-danger job-stop-btn" data-job="vuln" style="display:none;">
+        <i class="fas fa-stop"></i> Interrompi
+      </button>
       <span class="badge job-status-badge mr-2" data-job="vuln"></span>
       <button type="button" class="btn btn-sm btn-outline-secondary" data-toggle="collapse" data-target="#vulnFilterPanel">
         <i class="fas fa-filter"></i> Filtri
@@ -82,7 +85,7 @@
 
     <table id="vulnTable" class="table table-striped table-bordered table-sm" style="width:100%">
       <thead>
-        <tr><th>CVE</th><th>CVSS</th><th>Host</th><th>Porta</th><th>CPE</th><th>Rilevato il</th></tr>
+        <tr><th>CVE</th><th>CVSS</th><th>Host</th><th>Porta</th><th>CPE</th><th>Fonte</th><th>Rilevato il</th></tr>
       </thead>
     </table>
   </div>
@@ -108,6 +111,7 @@ $(function () {
       { data: null, render: (row) => `<a href="${row.ip_url}">${row.ip}</a> <span class="badge badge-${row.device_badge}">${row.device_type}</span>` },
       { data: 'port' },
       { data: null, render: (row) => `<small>${row.cpe}</small>` },
+      { data: null, render: (row) => row.source ? `<span class="badge badge-${row.source === 'nvd' ? 'info' : 'secondary'}">${row.source}</span>` : '' },
       { data: null, render: (row) => `<small>${row.detected_at}</small>` },
     ]
   });

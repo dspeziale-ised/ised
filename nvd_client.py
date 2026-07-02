@@ -36,6 +36,10 @@ def is_configured():
     return True
 
 
+def has_api_key():
+    return bool(_load_api_key())
+
+
 def _load_api_key():
     key = os.environ.get("NVD_API_KEY")
     if key:
