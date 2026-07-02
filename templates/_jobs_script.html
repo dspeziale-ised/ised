@@ -1,0 +1,53 @@
+function initJobWidgets(jobs) {
+  Object.keys(jobs).forEach(function (name) {
+    const btn = document.querySelector('.job-start-btn[data-job="' + name + '"]');
+    const badge = document.querySelector('.job-status-badge[data-job="' + name + '"]');
+    const logEl = document.querySelector('.job-log[data-job="' + name + '"]');
+    const cfg = jobs[name] || {};
+
+    function setBadge(running) {
+      if (!badge) return;
+      badge.className = 'badge job-status-badge ' + (running ? 'badge-info' : 'badge-secondary');
+      badge.setAttribute('data-job', name);
+      badge.innerHTML = running
+        ? '<i class="fas fa-spinner fa-spin"></i> in corso'
+        : '<i class="fas fa-check"></i> inattivo';
+    }
+
+    function refreshStatus() {
+      fetch('/api/jobs/' + name + '/status')
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          setBadge(d.running);
+          if (btn) btn.disabled = d.running;
+          if (logEl && typeof d.log === 'string') {
+            const atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 10;
+            logEl.textContent = d.log || '(nessun log ancora)';
+            if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+          }
+        })
+        .catch(function () {});
+    }
+
+    if (btn) {
+      btn.addEventListener('click', function () {
+        btn.disabled = true;
+        const force = cfg.forceCheckbox ? document.getElementById(cfg.forceCheckbox) : null;
+        const body = new URLSearchParams();
+        if (force && force.checked) body.set('force', '1');
+        fetch('/jobs/' + name + '/start', { method: 'POST', body: body })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (!d.started) { alert(d.reason || 'Non avviato.'); }
+            refreshStatus();
+          })
+          .catch(function () { alert('Errore di rete.'); btn.disabled = false; });
+      });
+    }
+
+    if (badge || logEl) {
+      refreshStatus();
+      setInterval(refreshStatus, 4000);
+    }
+  });
+}

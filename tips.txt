@@ -1,0 +1,3 @@
+python classify_devices.py                # solo host nuovi (comportamento predefinito)
+python classify_devices.py --force        # riclassifica tutto
+python classify_devices.py --all          # stesso di --force, nome più leggibile

@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+{% block title %}{{ host.ip }}{% endblock %}
+{% block page_title %}Host {{ host.ip }}{% endblock %}
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('hosts_list') }}">Host</a></li>
+<li class="breadcrumb-item active">{{ host.ip }}</li>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+  <div class="col-md-4">
+    {% if host.ai_device_type %}
+    <div class="card card-outline card-success">
+      <div class="card-header">
+        <h3 class="card-title"><i class="fas fa-robot"></i> Classificazione AI</h3>
+        <div class="card-tools">
+          <span class="badge badge-secondary" title="Provider che ha generato questa classificazione">
+            {{ host.ai_provider or 'sconosciuto' }}
+          </span>
+        </div>
+      </div>
+      <div class="card-body">
+        <h5 class="mb-1">{{ host.ai_device_type }}</h5>
+        <div class="progress mb-2" style="height: 16px;">
+          <div class="progress-bar bg-success" style="width: {{ host.ai_confidence }}%">{{ host.ai_confidence }}%</div>
+        </div>
+        <p class="text-muted small mb-1">{{ host.ai_reasoning }}</p>
+        <p class="text-muted small mb-0">
+          Classificato il {{ host.ai_classified_at }} &middot; provider: <strong>{{ host.ai_provider or 'sconosciuto' }}</strong>
+        </p>
+      </div>
+    </div>
+    {% endif %}
+    <div class="card card-outline card-primary">
+      <div class="card-header"><h3 class="card-title">Informazioni generali</h3></div>
+      <div class="card-body p-0">
+        <table class="table table-sm">
+          <tr><th style="width:40%">IP</th><td>{{ host.ip }}</td></tr>
+          <tr><th>Hostname</th><td>{{ host.hostname or '&mdash;' | safe }}</td></tr>
+          <tr><th>Stato</th><td><span class="badge badge-{{ 'success' if host.state == 'up' else 'secondary' }}">{{ host.state }}</span></td></tr>
+          <tr>
+            <th>Tipo dispositivo</th>
+            <td>
+              <div id="deviceTypeView">
+                <span class="badge badge-{{ host.device_type|badge_class }}" id="deviceTypeBadge">{{ host.device_type or 'unknown' }}</span>
+                {% if host.device_type_manual %}
+                  <span class="badge badge-dark" title="Impostato manualmente">manuale</span>
+                {% elif host.ai_device_type %}
+                  <span class="badge badge-info" title="Da classificazione AI (Groq)"><i class="fas fa-robot"></i></span>
+                {% endif %}
+                <button type="button" id="editDeviceTypeBtn" class="btn btn-xs btn-link p-0 ml-1" title="Modifica">
+                  <i class="fas fa-pen"></i>
+                </button>
+              </div>
+              <div id="deviceTypeEdit" style="display:none;">
+                <div class="input-group input-group-sm">
+                  <input type="text" id="deviceTypeInput" class="form-control"
+                         list="deviceTypeSuggestions" value="{{ host.device_type or '' }}">
+                  <div class="input-group-append">
+                    <button type="button" id="saveDeviceTypeBtn" class="btn btn-success"><i class="fas fa-check"></i></button>
+                    <button type="button" id="cancelDeviceTypeBtn" class="btn btn-outline-secondary"><i class="fas fa-times"></i></button>
+                  </div>
+                </div>
+                <datalist id="deviceTypeSuggestions">
+                  {% for opt in device_type_options %}
+                  <option value="{{ opt }}">
+                  {% endfor %}
+                </datalist>
+                <div id="deviceTypeError" class="text-danger small mt-1"></div>
+              </div>
+            </td>
+          </tr>
+          {% if roles %}
+          <tr>
+            <th>Sotto-tipi / ruoli</th>
+            <td>
+              {% for role in roles %}
+              <span class="badge badge-info mr-1 mb-1">{{ role }}</span>
+              {% endfor %}
+            </td>
+          </tr>
+          {% endif %}
+          <tr><th>Vendor dispositivo</th><td>{{ host.device_vendor or '&mdash;' | safe }}</td></tr>
+          <tr><th>MAC</th><td>{{ host.mac_address or '&mdash;' | safe }}</td></tr>
+          <tr><th>Vendor MAC</th><td>{{ host.mac_vendor or '&mdash;' | safe }}</td></tr>
+          <tr><th>Distanza (hop)</th><td>{{ host.distance if host.distance is not none else '&mdash;' | safe }}</td></tr>
+          <tr><th>Timeout durante scan</th><td>{{ 'Sì' if host.timed_out else 'No' }}</td></tr>
+          <tr><th>Ultima scansione</th><td>{{ host.last_scanned or '&mdash;' | safe }}</td></tr>
+          <tr><th>Durata scan (s)</th><td>{{ host.scan_duration if host.scan_duration is not none else '&mdash;' | safe }}</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-8">
+    <div class="card card-outline card-secondary">
+      <div class="card-header">
+        <h3 class="card-title">OS fingerprint (best match: {{ host.os_name or 'nessuno' }}{% if host.os_accuracy %}, {{ host.os_accuracy }}%{% endif %})</h3>
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-striped table-sm">
+          <thead>
+            <tr><th>Nome OS</th><th>Accuratezza</th><th>Tipo</th><th>Famiglia</th><th>Generazione</th><th>Vendor</th></tr>
+          </thead>
+          <tbody>
+            {% for m in os_matches %}
+            <tr>
+              <td>{{ m.name }}</td>
+              <td>
+                <div class="progress" style="height: 16px; width:100px;">
+                  <div class="progress-bar bg-info" style="width: {{ m.accuracy }}%">{{ m.accuracy }}%</div>
+                </div>
+              </td>
+              <td>{{ m.os_type or '' }}</td>
+              <td>{{ m.os_family or '' }}</td>
+              <td>{{ m.os_gen or '' }}</td>
+              <td>{{ m.vendor or '' }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="text-muted">Nessun fingerprint OS disponibile per questo host.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card card-outline card-success">
+      <div class="card-header">
+        <h3 class="card-title">Porte e servizi ({{ services|length }})</h3>
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-striped table-sm">
+          <thead>
+            <tr><th>Porta</th><th>Proto</th><th>Stato</th><th>Servizio</th><th>Prodotto</th><th>Versione</th><th>Extra</th><th>Tunnel</th></tr>
+          </thead>
+          <tbody>
+            {% for s in services %}
+            <tr>
+              <td>{{ s.port }}</td>
+              <td>{{ s.protocol }}</td>
+              <td><span class="badge badge-{{ 'success' if s.state == 'open' else 'secondary' }}">{{ s.state }}</span></td>
+              <td>
+                <a href="{{ url_for('service_hosts', port=s.port, protocol=s.protocol, service_name=s.service_name or 'unknown') }}">
+                  {{ s.service_name or 'unknown' }}
+                </a>
+              </td>
+              <td>{{ s.product or '' }}</td>
+              <td>{{ s.version or '' }}</td>
+              <td><small>{{ s.extrainfo or '' }}</small></td>
+              <td>{{ s.tunnel or '' }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="8" class="text-muted">Nessuna porta/servizio rilevato.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card card-outline card-danger">
+      <div class="card-header">
+        <h3 class="card-title"><i class="fas fa-bug"></i> Vulnerabilità note ({{ vulnerabilities|length }})</h3>
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-striped table-sm">
+          <thead>
+            <tr><th>CVE</th><th>CVSS</th><th>Porta</th><th>CPE</th><th>Fonte</th><th>Rilevato il</th></tr>
+          </thead>
+          <tbody>
+            {% for v in vulnerabilities %}
+            <tr>
+              <td>
+                {% if v.url %}<a href="{{ v.url }}" target="_blank" rel="noopener">{{ v.cve_id }}</a>{% else %}{{ v.cve_id }}{% endif %}
+              </td>
+              <td>
+                {% if v.cvss %}
+                <span class="badge badge-{{ 'danger' if v.cvss >= 7 else ('warning' if v.cvss >= 4 else 'secondary') }}">{{ v.cvss }}</span>
+                {% endif %}
+              </td>
+              <td>{{ v.port or '' }}</td>
+              <td><small>{{ v.cpe or '' }}</small></td>
+              <td>{{ v.source or '' }}</td>
+              <td><small>{{ v.detected_at or '' }}</small></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="text-muted">Nessuna vulnerabilità nota (o scansione vulnerabilità non ancora eseguita).</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+$(function () {
+  const view = document.getElementById('deviceTypeView');
+  const edit = document.getElementById('deviceTypeEdit');
+  const input = document.getElementById('deviceTypeInput');
+  const error = document.getElementById('deviceTypeError');
+  const badge = document.getElementById('deviceTypeBadge');
+
+  function showEdit() {
+    error.textContent = '';
+    input.value = badge.textContent.trim();
+    view.style.display = 'none';
+    edit.style.display = 'block';
+    input.focus();
+  }
+
+  function showView() {
+    edit.style.display = 'none';
+    view.style.display = 'block';
+  }
+
+  document.getElementById('editDeviceTypeBtn').addEventListener('click', showEdit);
+  document.getElementById('cancelDeviceTypeBtn').addEventListener('click', showView);
+
+  document.getElementById('saveDeviceTypeBtn').addEventListener('click', () => {
+    const value = input.value.trim();
+    if (!value) {
+      error.textContent = 'Il tipo dispositivo non può essere vuoto.';
+      return;
+    }
+    fetch("{{ url_for('update_device_type', ip=host.ip) }}", {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_type: value }),
+    })
+      .then(r => r.json().then(d => ({ status: r.status, body: d })))
+      .then(({ status, body }) => {
+        if (status !== 200 || !body.ok) {
+          error.textContent = body.error || 'Errore durante il salvataggio.';
+          return;
+        }
+        badge.textContent = body.device_type;
+        badge.className = 'badge badge-' + body.badge_class;
+        location.reload();
+      })
+      .catch(() => { error.textContent = 'Errore di rete.'; });
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('saveDeviceTypeBtn').click();
+    if (e.key === 'Escape') showView();
+  });
+});
+</script>
+{% endblock %}

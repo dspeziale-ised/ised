@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Log Scansioni{% endblock %}
+{% block page_title %}Log Scansioni{% endblock %}
+{% block breadcrumb %}<li class="breadcrumb-item active">Log Scansioni</li>{% endblock %}
+
+{% block content %}
+<div class="card card-outline card-secondary">
+  <div class="card-header">
+    <h3 class="card-title">Batch eseguiti</h3>
+  </div>
+  <div class="card-body">
+    <table id="scansTable" class="table table-striped table-bordered table-sm" style="width:100%">
+      <thead>
+        <tr><th>#</th><th>Inizio</th><th>Fine</th><th>Host target</th><th>Stato</th><th>File XML</th></tr>
+      </thead>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+$(function () {
+  $('#scansTable').DataTable({
+    processing: true,
+    serverSide: true,
+    order: [[0, 'desc']],
+    pageLength: 25,
+    language: DT_LANG_IT,
+    ajax: { url: "{{ url_for('api_scans') }}" },
+    columns: [
+      { data: 'id' },
+      { data: null, render: (row) => `<small>${row.started_at}</small>` },
+      { data: null, render: (row) => `<small>${row.finished_at}</small>` },
+      { data: 'target_count', className: 'text-right' },
+      { data: null, render: (row) => `<span class="badge badge-${row.status === 'ok' ? 'success' : 'warning'}">${row.status}</span>` },
+      { data: null, render: (row) => `<small class="text-muted">${row.xml_path}</small>` },
+    ]
+  });
+});
+</script>
+{% endblock %}

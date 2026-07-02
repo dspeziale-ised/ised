@@ -1,0 +1,278 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+{% block breadcrumb %}<li class="breadcrumb-item active">Dashboard</li>{% endblock %}
+
+{% block content %}
+<div class="row">
+  <div class="col-lg-3 col-6">
+    <div class="small-box bg-info">
+      <div class="inner">
+        <h3>{{ total_hosts }}</h3>
+        <p>Host attivi registrati</p>
+      </div>
+      <div class="icon"><i class="fas fa-desktop"></i></div>
+      <a href="{{ url_for('hosts_list') }}" class="small-box-footer">Vedi elenco <i class="fas fa-arrow-circle-right"></i></a>
+    </div>
+  </div>
+  <div class="col-lg-3 col-6">
+    <div class="small-box bg-success">
+      <div class="inner">
+        <h3>{{ total_open_services }}</h3>
+        <p>Servizi/porte aperte</p>
+      </div>
+      <div class="icon"><i class="fas fa-plug"></i></div>
+      <a href="{{ url_for('services_list') }}" class="small-box-footer">Vedi servizi <i class="fas fa-arrow-circle-right"></i></a>
+    </div>
+  </div>
+  <div class="col-lg-3 col-6">
+    <div class="small-box bg-warning">
+      <div class="inner">
+        <h3>{{ by_device|length }}</h3>
+        <p>Tipi di dispositivo distinti</p>
+      </div>
+      <div class="icon"><i class="fas fa-shapes"></i></div>
+      <span class="small-box-footer">&nbsp;</span>
+    </div>
+  </div>
+  <div class="col-lg-3 col-6">
+    <div class="small-box bg-secondary">
+      <div class="inner">
+        <h3>{{ scans_total }}</h3>
+        <p>Batch di scansione eseguiti</p>
+      </div>
+      <div class="icon"><i class="fas fa-history"></i></div>
+      <a href="{{ url_for('scans_list') }}" class="small-box-footer">Vedi log <i class="fas fa-arrow-circle-right"></i></a>
+    </div>
+  </div>
+</div>
+
+<div class="card card-outline card-secondary">
+  <div class="card-header"><h3 class="card-title"><i class="fas fa-bolt"></i> Azioni rapide</h3></div>
+  <div class="card-body">
+    <button type="button" class="btn btn-primary job-start-btn mr-2" data-job="rescan">
+      <i class="fas fa-sync-alt"></i> Aggiorna scansione
+    </button>
+    <button type="button" class="btn btn-success job-start-btn mr-2" data-job="classify">
+      <i class="fas fa-robot"></i> Classifica con AI
+    </button>
+    <button type="button" class="btn btn-danger job-start-btn mr-2" data-job="vuln">
+      <i class="fas fa-bug"></i> Scansiona vulnerabilità
+    </button>
+    <span class="badge job-status-badge mr-1" data-job="rescan"></span>
+    <span class="badge job-status-badge mr-1" data-job="classify"></span>
+    <span class="badge job-status-badge mr-1" data-job="vuln"></span>
+    <a href="{{ url_for('operations') }}" class="btn btn-sm btn-outline-secondary float-right">
+      <i class="fas fa-cogs"></i> Vai a Operazioni
+    </a>
+  </div>
+</div>
+
+<div class="card card-outline" id="scanStatusCard">
+  <div class="card-header">
+    <h3 class="card-title">
+      <span id="scanStatusBadge" class="badge badge-secondary">&nbsp;</span>
+      Stato scansione
+    </h3>
+    <div class="card-tools">
+      <small class="text-muted">Ultimo batch: <span id="scanLastUpdate">&mdash;</span></small>
+    </div>
+  </div>
+  <div class="card-body">
+    <div class="progress mb-3" style="height: 22px;">
+      <div id="scanProgressBar" class="progress-bar bg-info" role="progressbar" style="width: {{ scan_progress.percent }}%">
+        {{ scan_progress.percent }}%
+      </div>
+    </div>
+    <div class="row text-center">
+      <div class="col-6 col-md-3">
+        <div class="description-block border-right">
+          <h5 class="description-header" id="scanHostsRecorded">{{ scan_progress.hosts_recorded }}</h5>
+          <span class="description-text text-muted">HOST REGISTRATI</span>
+        </div>
+      </div>
+      <div class="col-6 col-md-3">
+        <div class="description-block border-right">
+          <h5 class="description-header" id="scanTotalIps">{{ scan_progress.total_ips }}</h5>
+          <span class="description-text text-muted">DA SCANSIONARE</span>
+        </div>
+      </div>
+      <div class="col-6 col-md-3">
+        <div class="description-block border-right">
+          <h5 class="description-header"><span id="scanBatchesDone">{{ scan_progress.batches_done }}</span> / <span id="scanBatchesExpected">{{ scan_progress.batches_expected }}</span></h5>
+          <span class="description-text text-muted">BATCH COMPLETATI</span>
+        </div>
+      </div>
+      <div class="col-6 col-md-3">
+        <div class="description-block">
+          <h5 class="description-header" id="scanEta">&mdash;</h5>
+          <span class="description-text text-muted">ETA STIMATO</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col-md-5">
+    <div class="card card-primary card-outline">
+      <div class="card-header">
+        <h3 class="card-title">Distribuzione per tipo dispositivo</h3>
+      </div>
+      <div class="card-body">
+        <canvas id="deviceChart" style="min-height:250px"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-7">
+    <div class="card card-outline">
+      <div class="card-header">
+        <h3 class="card-title">Tipo dispositivo</h3>
+      </div>
+      <div class="card-body">
+        <table id="deviceTypeTable" class="table table-striped table-sm" style="width:100%">
+          <thead><tr><th>Tipo</th><th class="text-right">Host</th></tr></thead>
+          <tbody>
+            {% for row in by_device %}
+            <tr>
+              <td><span class="badge badge-{{ row.device_type|badge_class }}">{{ row.device_type }}</span></td>
+              <td class="text-right" data-order="{{ row.c }}">{{ row.c }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col-md-6">
+    <div class="card card-outline card-secondary">
+      <div class="card-header">
+        <h3 class="card-title">Top 10 famiglie di OS</h3>
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-striped table-sm">
+          <thead><tr><th>OS Family</th><th class="text-right">Host</th></tr></thead>
+          <tbody>
+            {% for row in by_os_family %}
+            <tr><td>{{ row.os_family }}</td><td class="text-right">{{ row.c }}</td></tr>
+            {% else %}
+            <tr><td colspan="2" class="text-muted">Nessun dato OS ancora disponibile</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-6">
+    <div class="card card-outline card-success">
+      <div class="card-header">
+        <h3 class="card-title">Top 10 servizi più diffusi</h3>
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-striped table-sm">
+          <thead><tr><th>Porta</th><th>Servizio</th><th class="text-right">Host</th></tr></thead>
+          <tbody>
+            {% for row in top_services %}
+            <tr>
+              <td>{{ row.port }}/{{ row.protocol }}</td>
+              <td>
+                <a href="{{ url_for('service_hosts', port=row.port, protocol=row.protocol, service_name=row.service_name) }}">
+                  {{ row.service_name }}
+                </a>
+              </td>
+              <td class="text-right">{{ row.hosts_count }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+$('#deviceTypeTable').DataTable({
+  order: [[1, 'desc']],
+  pageLength: 25,
+  language: DT_LANG_IT,
+});
+
+// Barre orizzontali invece della ciambella: con molti tipi dispositivo le
+// fette diventano troppo sottili/illeggibili, le barre restano leggibili
+// anche con decine di categorie (e ogni etichetta ha spazio per il testo).
+const devicePalette = ['#4e79a7','#76b7b2','#e15759','#59a14f','#9c755f','#af7aa1','#f28e2b','#b6992d','#ff9da7','#ffbe7d','#d4a6c8','#6b6ecf','#17a2b8','#c9ccd1'];
+const deviceLabels = {{ by_device|map(attribute='device_type')|list|tojson }};
+const deviceCounts = {{ by_device|map(attribute='c')|list|tojson }};
+const deviceChartHeight = Math.max(250, deviceLabels.length * 28);
+document.getElementById('deviceChart').parentElement.style.height = deviceChartHeight + 'px';
+new Chart(document.getElementById('deviceChart'), {
+  type: 'bar',
+  data: {
+    labels: deviceLabels,
+    datasets: [{
+      data: deviceCounts,
+      backgroundColor: deviceLabels.map((_, i) => devicePalette[i % devicePalette.length]),
+    }]
+  },
+  options: {
+    indexAxis: 'y',
+    plugins: { legend: { display: false } },
+    scales: { x: { beginAtZero: true, ticks: { precision: 0 } } },
+    maintainAspectRatio: false,
+  }
+});
+
+const STATUS_BADGE = { running: 'info', completed: 'success', paused: 'warning', idle: 'secondary' };
+const STATUS_LABEL = {
+  running: '<i class="fas fa-spinner fa-spin"></i> Scansione in corso',
+  completed: '<i class="fas fa-check"></i> Completata',
+  paused: '<i class="fas fa-pause"></i> In pausa / interrotta',
+  idle: '<i class="fas fa-hourglass"></i> Inattiva'
+};
+
+function formatEta(seconds) {
+  if (seconds === null || seconds === undefined) return '&mdash;';
+  seconds = Math.round(seconds);
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h > 0) return h + 'h ' + m + 'm';
+  return m + 'm';
+}
+
+function refreshScanStatus() {
+  fetch('{{ url_for("scan_status_api") }}')
+    .then(r => r.json())
+    .then(d => {
+      const badge = document.getElementById('scanStatusBadge');
+      badge.className = 'badge badge-' + (STATUS_BADGE[d.status] || 'secondary');
+      badge.innerHTML = STATUS_LABEL[d.status] || d.status;
+
+      const bar = document.getElementById('scanProgressBar');
+      bar.style.width = d.percent + '%';
+      bar.textContent = d.percent + '%';
+      bar.className = 'progress-bar bg-' + (d.status === 'running' ? 'info progress-bar-striped progress-bar-animated' : (d.status === 'completed' ? 'success' : 'secondary'));
+
+      document.getElementById('scanHostsRecorded').textContent = d.hosts_recorded;
+      document.getElementById('scanTotalIps').textContent = d.total_ips;
+      document.getElementById('scanBatchesDone').textContent = d.batches_done;
+      document.getElementById('scanBatchesExpected').textContent = d.batches_expected;
+      document.getElementById('scanEta').innerHTML = d.status === 'running' ? formatEta(d.eta_seconds) : '&mdash;';
+      document.getElementById('scanLastUpdate').textContent = d.last_batch_finished_at || '—';
+    })
+    .catch(() => {});
+}
+
+refreshScanStatus();
+setInterval(refreshScanStatus, 5000);
+
+{% include "_jobs_script.html" %}
+initJobWidgets({ rescan: {}, classify: {}, vuln: {} });
+</script>
+{% endblock %}

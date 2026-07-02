@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""Scansiona le vulnerabilità (CVE) note per i servizi con CPE identificata,
+usando lo script NSE 'vulners' di nmap (che interroga vulners.com).
+
+Per limitare il numero di scansioni/richieste esterne, i servizi vengono
+raggruppati per CPE identica (stesso prodotto/versione, es.
+cpe:/a:openbsd:openssh:8.2): il lookup CVE avviene una sola volta per CPE
+(tramite un solo host rappresentativo), il risultato viene messo in cache
+(tabella cve_cache) e applicato a TUTTI gli host che condividono quella CPE,
+senza rilanciare nmap per ognuno.
+
+Uso:
+    python vuln_scan.py                    # tutte le CPE non ancora in cache (o scadute)
+    python vuln_scan.py --force             # riesegue il lookup anche se già in cache
+    python vuln_scan.py --max-age-days 7    # considera 'fresca' la cache solo per 7 giorni
+    python vuln_scan.py --limit 5           # solo le prime N CPE (per test)
+"""
+
+import argparse
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from xml.etree import ElementTree as ET
+
+import cve_lookup
+import scanner_db
+from job_lock import JobLock
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+BASE = Path(__file__).parent
+DB_PATH = BASE / "inventory.db"
+LOCK_FILE = BASE / "vuln.lock"
+NMAP_BIN = shutil.which("nmap") or "nmap"
+
+
+def build_cpe_groups(conn):
+    """Ritorna dict {cpe: [(host_id, ip, port), ...]} per i servizi aperti
+    con una CPE nota."""
+    rows = conn.execute(
+        """SELECT s.cpe AS cpe, s.port AS port, h.id AS host_id, h.ip AS ip
+           FROM services s
+           JOIN hosts h ON h.id = s.host_id
+           WHERE s.cpe IS NOT NULL AND s.cpe != '' AND s.state = 'open'
+           ORDER BY h.ip, s.port"""
+    ).fetchall()
+
+    groups = {}
+    for r in rows:
+        groups.setdefault(r["cpe"], []).append((r["host_id"], r["ip"], r["port"]))
+    return groups
+
+
+def fetch_vulners_output(ip, port, timeout=90):
+    """Esegue nmap --script vulners su un singolo host:porta e ritorna
+    l'output testuale dello script 'vulners' (o None se assente/errore)."""
+    try:
+        result = subprocess.run(
+            [NMAP_BIN, "-Pn", "-p", str(port), "--script", "vulners", "-oX", "-", ip],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"  [!] Timeout nmap/vulners su {ip}:{port}")
+        return None
+
+    try:
+        root = ET.fromstring(result.stdout)
+    except ET.ParseError:
+        print(f"  [!] Output nmap non valido per {ip}:{port}")
+        return None
+
+    for script in root.iter("script"):
+        if script.get("id") == "vulners":
+            return script.get("output")
+    return None
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--force", action="store_true", help="Riesegue il lookup anche per CPE già in cache")
+    parser.add_argument("--max-age-days", type=int, default=30, help="Validità della cache CVE in giorni")
+    parser.add_argument("--limit", type=int, help="Limita il numero di CPE da elaborare (per test)")
+    args = parser.parse_args()
+
+    with JobLock(LOCK_FILE):
+        conn = scanner_db.connect(str(DB_PATH))
+        scanner_db.init_db(conn)
+        scanner_db.ensure_service_columns(conn)
+
+        groups = build_cpe_groups(conn)
+        print(f"{len(groups)} CPE distinte trovate tra i servizi scansionati "
+              f"(su {sum(len(v) for v in groups.values())} servizio/host totali).")
+
+        items = list(groups.items())
+        if args.limit:
+            items = items[: args.limit]
+
+        cached_hits = 0
+        fresh_lookups = 0
+        total_cves_assigned = 0
+
+        for cpe, host_ports in items:
+            rep_host_id, rep_ip, rep_port = host_ports[0]
+
+            def fetch():
+                print(f"Lookup CVE per {cpe} (via {rep_ip}:{rep_port})...")
+                output = fetch_vulners_output(rep_ip, rep_port)
+                return cve_lookup.parse_vulners_output(output) if output else []
+
+            if args.force:
+                cve_list = fetch()
+                scanner_db.set_cached_cve(conn, cpe, cve_list)
+                from_cache = False
+            else:
+                cve_list, from_cache = cve_lookup.get_or_fetch(
+                    conn, cpe, fetch, max_age_days=args.max_age_days
+                )
+
+            if from_cache:
+                cached_hits += 1
+            else:
+                fresh_lookups += 1
+
+            for host_id, ip, port in host_ports:
+                scanner_db.set_host_vulnerabilities(conn, host_id, port, cpe, cve_list, source="vulners")
+            total_cves_assigned += len(cve_list) * len(host_ports)
+
+            tag = "(cache)" if from_cache else "(nuovo)"
+            if cve_list:
+                print(f"  {cpe} {tag}: {len(cve_list)} CVE -> applicate a {len(host_ports)} host/porta")
+            else:
+                print(f"  {cpe} {tag}: nessuna CVE nota")
+
+        conn.close()
+        print(
+            f"\nCompletato: {len(items)} CPE elaborate "
+            f"({fresh_lookups} lookup nuovi, {cached_hits} da cache), "
+            f"{total_cves_assigned} associazioni host/CVE aggiornate."
+        )
+
+
+if __name__ == "__main__":
+    main()

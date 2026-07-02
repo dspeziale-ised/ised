@@ -1,0 +1,24 @@
+# Segreti: mai committare
+.groq_api_key
+.gemini_api_key
+.ollama_api_key
+*.env
+
+# Dati di rete interni / risultati scansione: contengono IP, hostname,
+# fingerprint e vulnerabilità della rete interna, non vanno pubblicati
+inventory.db
+inventory.db-journal
+scans/
+scans_test/
+data/
+up_ips.txt
+
+# Log e file di stato runtime
+*.log
+*_log.txt
+*.lock
+
+__pycache__/
+*.pyc
+.venv/
+venv/

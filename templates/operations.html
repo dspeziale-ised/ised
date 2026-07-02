@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Operazioni{% endblock %}
+{% block page_title %}Operazioni{% endblock %}
+{% block breadcrumb %}<li class="breadcrumb-item active">Operazioni</li>{% endblock %}
+
+{% block content %}
+<p class="text-muted">
+  Tutte le operazioni di raccolta/analisi dati si avviano da qui: nessun comando da terminale.
+</p>
+
+<div class="row">
+  <div class="col-md-4">
+    <div class="card card-outline card-primary h-100">
+      <div class="card-header"><h3 class="card-title"><i class="fas fa-sync-alt"></i> Aggiorna scansione</h3></div>
+      <div class="card-body">
+        <p class="small">
+          Ri-estrae gli IP up da <code>data/ised.xml</code> e scansiona (nmap) solo quelli
+          nuovi/non ancora registrati.
+        </p>
+        {% if xml_exists %}
+        <p class="text-muted small">File attuale: modificato il <strong>{{ xml_mtime }}</strong></p>
+        {% else %}
+        <div class="alert alert-warning small">Nessun <code>data/ised.xml</code> trovato.</div>
+        {% endif %}
+        <button class="btn btn-primary job-start-btn" data-job="rescan" {{ 'disabled' if jobs_running.rescan else '' }}>
+          <i class="fas fa-play"></i> Avvia
+        </button>
+        <span class="badge job-status-badge ml-2" data-job="rescan"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <div class="card card-outline card-success h-100">
+      <div class="card-header"><h3 class="card-title"><i class="fas fa-robot"></i> Classificazione AI</h3></div>
+      <div class="card-body">
+        <p class="small">
+          Raggruppa gli host per fingerprint identico e chiede a un LLM (Ollama/Groq/Gemini)
+          tipo dispositivo, vendor e ruoli. Classifica di default solo gli host nuovi.
+        </p>
+        <div class="form-check mb-2">
+          <input type="checkbox" class="form-check-input" id="classifyForceCheck">
+          <label class="form-check-label small" for="classifyForceCheck">
+            Riclassifica anche gli host già classificati (--force)
+          </label>
+        </div>
+        <button class="btn btn-success job-start-btn" data-job="classify" {{ 'disabled' if jobs_running.classify else '' }}>
+          <i class="fas fa-play"></i> Avvia
+        </button>
+        <span class="badge job-status-badge ml-2" data-job="classify"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <div class="card card-outline card-danger h-100">
+      <div class="card-header"><h3 class="card-title"><i class="fas fa-bug"></i> Scansione vulnerabilità</h3></div>
+      <div class="card-body">
+        <p class="small">
+          Cerca CVE per le CPE rilevate (nmap --script vulners), con cache per CPE per non
+          ripetere lookup sulla stessa combinazione prodotto/versione.
+        </p>
+        <div class="form-check mb-2">
+          <input type="checkbox" class="form-check-input" id="vulnForceCheck">
+          <label class="form-check-label small" for="vulnForceCheck">
+            Riesegui anche per CPE già in cache (--force)
+          </label>
+        </div>
+        <button class="btn btn-danger job-start-btn" data-job="vuln" {{ 'disabled' if jobs_running.vuln else '' }}>
+          <i class="fas fa-play"></i> Avvia
+        </button>
+        <span class="badge job-status-badge ml-2" data-job="vuln"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col-md-4">
+    <div class="card card-outline">
+      <div class="card-header"><h3 class="card-title">Log &mdash; Aggiorna scansione</h3></div>
+      <div class="card-body"><pre class="job-log" data-job="rescan" style="max-height:300px; overflow-y:auto; background:#212529; color:#e9ecef; padding:.75rem; border-radius:.25rem; font-size:.75rem;"></pre></div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card card-outline">
+      <div class="card-header"><h3 class="card-title">Log &mdash; Classificazione AI</h3></div>
+      <div class="card-body"><pre class="job-log" data-job="classify" style="max-height:300px; overflow-y:auto; background:#212529; color:#e9ecef; padding:.75rem; border-radius:.25rem; font-size:.75rem;"></pre></div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card card-outline">
+      <div class="card-header"><h3 class="card-title">Log &mdash; Scansione vulnerabilità</h3></div>
+      <div class="card-body"><pre class="job-log" data-job="vuln" style="max-height:300px; overflow-y:auto; background:#212529; color:#e9ecef; padding:.75rem; border-radius:.25rem; font-size:.75rem;"></pre></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+{% include "_jobs_script.html" %}
+initJobWidgets({
+  rescan: { forceCheckbox: null },
+  classify: { forceCheckbox: 'classifyForceCheck' },
+  vuln: { forceCheckbox: 'vulnForceCheck' },
+});
+</script>
+{% endblock %}
