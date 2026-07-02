@@ -1,29 +1,35 @@
 #!/usr/bin/env python3
-"""Scansiona le vulnerabilità (CVE) note per i servizi con CPE identificata,
-usando lo script NSE 'vulners' di nmap (che interroga vulners.com).
+"""Scansiona le vulnerabilità (CVE) note per i servizi con CPE identificata.
 
-Per limitare il numero di scansioni/richieste esterne, i servizi vengono
-raggruppati per CPE identica (stesso prodotto/versione, es.
-cpe:/a:openbsd:openssh:8.2): il lookup CVE avviene una sola volta per CPE
-(tramite un solo host rappresentativo), il risultato viene messo in cache
-(tabella cve_cache) e applicato a TUTTI gli host che condividono quella CPE,
-senza rilanciare nmap per ognuno.
+Fonte primaria: l'API pubblica NVD (nvd_client.py), interrogata direttamente
+con la CPE — non richiede nessuna scansione dal vivo, solo la stringa CPE
+già rilevata durante lo scan -sV. Se NVD non risponde o non trova nulla, si
+ricorre allo script NSE 'vulners' di nmap (interroga vulners.com) su un
+host rappresentativo come fallback.
+
+Per limitare il numero di richieste esterne, i servizi vengono raggruppati
+per CPE identica (stesso prodotto/versione, es. cpe:/a:openbsd:openssh:8.2):
+il lookup avviene una sola volta per CPE, il risultato viene messo in cache
+(tabella cve_cache) e applicato a TUTTI gli host che condividono quella CPE.
 
 Uso:
     python vuln_scan.py                    # tutte le CPE non ancora in cache (o scadute)
     python vuln_scan.py --force             # riesegue il lookup anche se già in cache
     python vuln_scan.py --max-age-days 7    # considera 'fresca' la cache solo per 7 giorni
     python vuln_scan.py --limit 5           # solo le prime N CPE (per test)
+    python vuln_scan.py --no-nvd            # salta NVD, usa solo nmap/vulners
 """
 
 import argparse
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import cve_lookup
+import nvd_client
 import scanner_db
 from job_lock import JobLock
 
@@ -34,6 +40,10 @@ BASE = Path(__file__).parent
 DB_PATH = BASE / "instance" / "inventory.db"
 LOCK_FILE = BASE / "vuln.lock"
 NMAP_BIN = shutil.which("nmap") or "nmap"
+# Rate limit pubblico NVD senza API key: 5 richieste/30s (con key: 50/30s).
+# Una pausa conservativa evita di beccare il rate limit su run lunghi.
+NVD_SLEEP_NO_KEY = 6.5
+NVD_SLEEP_WITH_KEY = 0.7
 
 
 def build_cpe_groups(conn):

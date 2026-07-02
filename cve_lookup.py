@@ -7,7 +7,10 @@ CVE/CVSS/URL in una lista di dict, (2) cachare il risultato per CPE così non
 serve ripetere la query per la stessa combinazione prodotto/versione.
 """
 
+import csv
 import datetime
+import io
+import json
 import re
 
 import scanner_db
@@ -61,3 +64,63 @@ def get_or_fetch(conn, cpe, fetch_fn, max_age_days=30):
     cve_list = fetch_fn()
     scanner_db.set_cached_cve(conn, cpe, cve_list)
     return cve_list, False
+
+
+def _normalize_cve_record(row):
+    """Normalizza un record grezzo (da CSV o JSON) in {id, cvss, url}."""
+    cvss_raw = row.get("cvss")
+    cvss = None
+    if cvss_raw not in (None, ""):
+        try:
+            cvss = float(cvss_raw)
+        except (TypeError, ValueError):
+            cvss = None
+    cve_id = (row.get("id") or row.get("cve_id") or row.get("cve") or "").strip().upper()
+    return {"id": cve_id, "cvss": cvss, "url": (row.get("url") or "").strip()}
+
+
+def parse_cve_import(content_bytes, filename=""):
+    """Parsa un file di import per pre-popolare la cache CVE. Formati
+    supportati (rilevati da estensione, altrimenti dal primo carattere):
+
+    - CSV con colonne: cpe,cve_id,cvss,url (una riga per CVE)
+    - JSON come oggetto {"<cpe>": [{"id":.., "cvss":.., "url":..}, ...], ...}
+    - JSON come lista di record: [{"cpe":.., "cve_id":.., "cvss":.., "url":..}, ...]
+
+    Ritorna dict {cpe: [ {id, cvss, url}, ... ]}. Righe/record senza cpe o
+    senza id CVE vengono scartati silenziosamente."""
+    text = content_bytes.decode("utf-8-sig", errors="replace")
+    name = (filename or "").lower()
+    stripped = text.lstrip()
+    looks_like_json = stripped[:1] in "{["
+
+    if name.endswith(".json") or (not name.endswith(".csv") and looks_like_json):
+        data = json.loads(text)
+        result = {}
+        if isinstance(data, dict):
+            for cpe, items in data.items():
+                cpe = (cpe or "").strip()
+                if not cpe:
+                    continue
+                normalized = [_normalize_cve_record(it) for it in items]
+                result[cpe] = [c for c in normalized if c["id"]]
+        elif isinstance(data, list):
+            for row in data:
+                cpe = (row.get("cpe") or "").strip()
+                if not cpe:
+                    continue
+                normalized = _normalize_cve_record(row)
+                if normalized["id"]:
+                    result.setdefault(cpe, []).append(normalized)
+        return result
+
+    result = {}
+    reader = csv.DictReader(io.StringIO(text))
+    for row in reader:
+        cpe = (row.get("cpe") or "").strip()
+        if not cpe:
+            continue
+        normalized = _normalize_cve_record(row)
+        if normalized["id"]:
+            result.setdefault(cpe, []).append(normalized)
+    return result

@@ -229,6 +229,34 @@ def set_cached_cve(conn, cpe, cve_list):
     conn.commit()
 
 
+def merge_cached_cve(conn, cpe, new_cve_list):
+    """Aggiunge/aggiorna le CVE di una CPE nella cache SENZA perdere quelle
+    già presenti (a differenza di set_cached_cve, che sovrascrive) — usato
+    per import cumulativi da file esterni. Ritorna il numero di CVE totali
+    in cache per quella CPE dopo il merge."""
+    cached = get_cached_cve(conn, cpe)
+    existing = cached[0] if cached else []
+    by_id = {c["id"]: c for c in existing if c.get("id")}
+    for c in new_cve_list:
+        cid = c.get("id")
+        if not cid:
+            continue
+        if cid not in by_id or (c.get("cvss") or 0) > (by_id[cid].get("cvss") or 0):
+            by_id[cid] = c
+    merged = sorted(by_id.values(), key=lambda c: c.get("cvss") or 0, reverse=True)
+    set_cached_cve(conn, cpe, merged)
+    return len(merged)
+
+
+def cve_cache_stats(conn):
+    """Ritorna {'cpes': N, 'cves': M} sulla cache CVE attuale."""
+    cpes = conn.execute("SELECT COUNT(*) c FROM cve_cache").fetchone()["c"]
+    total_cves = 0
+    for row in conn.execute("SELECT cve_json FROM cve_cache"):
+        total_cves += len(json.loads(row["cve_json"]))
+    return {"cpes": cpes, "cves": total_cves}
+
+
 def set_host_vulnerabilities(conn, host_id, port, cpe, cve_list, source):
     """Sostituisce le vulnerabilità note per un host/porta/cpe."""
     conn.execute(

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from flask import Flask, abort, g, jsonify, render_template, request, url_for
 
+import cve_lookup
 import scanner_db
 
 BASE_DIR = Path(__file__).parent
@@ -723,6 +724,37 @@ def api_scans():
         "recordsFiltered": records_filtered,
         "data": data,
     })
+
+
+@app.route("/api/cve-cache-stats")
+def cve_cache_stats_api():
+    return jsonify(scanner_db.cve_cache_stats(get_db()))
+
+
+@app.route("/vuln/import-cache", methods=["POST"])
+def vuln_import_cache():
+    file = request.files.get("cve_file")
+    if not file or not file.filename:
+        return jsonify({"ok": False, "error": "Nessun file selezionato."}), 400
+
+    try:
+        content = file.read()
+        parsed = cve_lookup.parse_cve_import(content, file.filename)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"Errore nel parsing del file: {e}"}), 400
+
+    if not parsed:
+        return jsonify({
+            "ok": False,
+            "error": "Nessuna CPE/CVE valida trovata nel file (verifica formato/colonne).",
+        }), 400
+
+    db = get_db()
+    imported_cves = sum(len(cve_list) for cve_list in parsed.values())
+    for cpe, cve_list in parsed.items():
+        scanner_db.merge_cached_cve(db, cpe, cve_list)
+
+    return jsonify({"ok": True, "cpes": len(parsed), "cves": imported_cves})
 
 
 @app.route("/vulnerabilities")
