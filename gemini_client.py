@@ -99,6 +99,8 @@ def classify_signature_groups(groups, timeout=90, model=None):
         raise LLMError(message) from e
     except urllib.error.URLError as e:
         raise LLMError(f"Errore di rete verso Gemini: {e}") from e
+    except (TimeoutError, ConnectionError, OSError) as e:
+        raise LLMError(f"Timeout/errore di connessione verso Gemini: {e}") from e
 
     try:
         content = body["candidates"][0]["content"]["parts"][0]["text"]

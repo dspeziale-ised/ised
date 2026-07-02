@@ -100,6 +100,8 @@ def classify_signature_groups(groups, timeout=90, model=None):
             "Se stai usando un'istanza locale, verifica che sia in esecuzione "
             "('ollama serve') e che il modello sia stato scaricato ('ollama pull <modello>')."
         ) from e
+    except (TimeoutError, ConnectionError, OSError) as e:
+        raise LLMError(f"Timeout/errore di connessione verso Ollama ({url}): {e}") from e
 
     try:
         content = body["choices"][0]["message"]["content"]

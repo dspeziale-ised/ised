@@ -99,6 +99,11 @@ def classify_signature_groups(groups, timeout=90, model=None):
         raise LLMError(message) from e
     except urllib.error.URLError as e:
         raise LLMError(f"Errore di rete verso Groq: {e}") from e
+    except (TimeoutError, ConnectionError, OSError) as e:
+        # Timeout durante la lettura della risposta (non sempre incapsulato
+        # in URLError da urllib): senza questo except lo script crasha
+        # invece di passare al provider successivo.
+        raise LLMError(f"Timeout/errore di connessione verso Groq: {e}") from e
 
     try:
         content = body["choices"][0]["message"]["content"]
