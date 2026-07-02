@@ -432,7 +432,12 @@ def hosts_list():
     os_families = db.execute(
         "SELECT DISTINCT os_family d FROM hosts WHERE os_family IS NOT NULL ORDER BY d"
     ).fetchall()
-    return render_template("hosts.html", device_types=device_types, os_families=os_families)
+    os_names = db.execute(
+        "SELECT DISTINCT os_name d FROM hosts WHERE os_name IS NOT NULL ORDER BY d"
+    ).fetchall()
+    return render_template(
+        "hosts.html", device_types=device_types, os_families=os_families, os_names=os_names
+    )
 
 
 HOSTS_ORDER_MAP = {
@@ -447,6 +452,7 @@ def api_hosts():
     draw, start, length, search_value, orders = dt_params()
     device_type = request.values.get("device_type", "").strip()
     os_family = request.values.get("os_family", "").strip()
+    os_name = request.values.get("os_name", "").strip()
 
     fixed_where = []
     fixed_params = []
@@ -456,6 +462,9 @@ def api_hosts():
     if os_family:
         fixed_where.append("h.os_family = ?")
         fixed_params.append(os_family)
+    if os_name:
+        fixed_where.append("h.os_name = ?")
+        fixed_params.append(os_name)
 
     total_sql = "SELECT COUNT(*) c FROM hosts h" + (
         " WHERE " + " AND ".join(fixed_where) if fixed_where else ""

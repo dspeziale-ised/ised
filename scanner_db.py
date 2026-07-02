@@ -103,12 +103,53 @@ CREATE TABLE IF NOT EXISTS host_vulnerabilities (
     detected_at TEXT
 );
 
+-- Matrice MITRE ATT&CK Enterprise (tattiche + tecniche), scaricata dalla
+-- fonte ufficiale (https://github.com/mitre/cti) e cachata localmente.
+CREATE TABLE IF NOT EXISTS attack_tactics (
+    shortname   TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    description TEXT,
+    url         TEXT,
+    sort_order  INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS attack_techniques (
+    technique_id        TEXT PRIMARY KEY,   -- es. 'T1021.001'
+    name                TEXT NOT NULL,
+    description         TEXT,
+    url                 TEXT,
+    is_subtechnique     INTEGER DEFAULT 0,
+    parent_technique_id TEXT,
+    platforms           TEXT
+);
+
+CREATE TABLE IF NOT EXISTS attack_technique_tactics (
+    technique_id     TEXT NOT NULL REFERENCES attack_techniques(technique_id) ON DELETE CASCADE,
+    tactic_shortname TEXT NOT NULL REFERENCES attack_tactics(shortname) ON DELETE CASCADE,
+    PRIMARY KEY (technique_id, tactic_shortname)
+);
+
+-- Tecniche ATT&CK potenzialmente applicabili a un host, secondo la
+-- mappatura euristica basata su servizi/vulnerabilità/tipo dispositivo
+-- (non un'analisi di exploit reali: segnala esposizione potenziale).
+CREATE TABLE IF NOT EXISTS host_attack_techniques (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id      INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    technique_id TEXT NOT NULL,
+    reason       TEXT,
+    source       TEXT,
+    detected_at  TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_os_matches_host ON os_matches(host_id);
 CREATE INDEX IF NOT EXISTS idx_services_host ON services(host_id);
 CREATE INDEX IF NOT EXISTS idx_hosts_device_type ON hosts(device_type);
 CREATE INDEX IF NOT EXISTS idx_host_roles_host ON host_roles(host_id);
 CREATE INDEX IF NOT EXISTS idx_service_scripts_service ON service_scripts(service_id);
 CREATE INDEX IF NOT EXISTS idx_host_vulnerabilities_host ON host_vulnerabilities(host_id);
+CREATE INDEX IF NOT EXISTS idx_attack_technique_tactics_tactic ON attack_technique_tactics(tactic_shortname);
+CREATE INDEX IF NOT EXISTS idx_host_attack_techniques_host ON host_attack_techniques(host_id);
+CREATE INDEX IF NOT EXISTS idx_host_attack_techniques_technique ON host_attack_techniques(technique_id);
 CREATE INDEX IF NOT EXISTS idx_host_vulnerabilities_cve ON host_vulnerabilities(cve_id);
 """
 
@@ -270,6 +311,97 @@ def set_host_vulnerabilities(conn, host_id, port, cpe, cve_list, source):
             (host_id, port, cpe, cve.get("id"), cve.get("cvss"), cve.get("url"), source),
         )
     conn.commit()
+
+
+def ensure_attack_tables(conn):
+    """Crea le tabelle attack_* se mancanti (DB preesistente). Idempotente."""
+    conn.executescript(SCHEMA)
+    conn.commit()
+
+
+def set_host_attack_techniques(conn, host_id, techniques, source="heuristic"):
+    """Sostituisce le tecniche ATT&CK associate a un host per una data fonte.
+    techniques: lista di dict {'technique_id': ..., 'reason': ...}."""
+    conn.execute(
+        "DELETE FROM host_attack_techniques WHERE host_id = ? AND source = ?", (host_id, source)
+    )
+    for t in techniques or []:
+        technique_id = (t.get("technique_id") or "").strip()
+        if not technique_id:
+            continue
+        conn.execute(
+            """INSERT INTO host_attack_techniques (host_id, technique_id, reason, source, detected_at)
+               VALUES (?, ?, ?, ?, datetime('now'))""",
+            (host_id, technique_id, t.get("reason", ""), source),
+        )
+    conn.commit()
+
+
+def get_host_attack_techniques(conn, host_id):
+    """Ritorna le tecniche ATT&CK rilevate per un host, con nome/tattiche/url."""
+    rows = conn.execute(
+        """SELECT hat.technique_id, hat.reason, hat.detected_at,
+                  at.name, at.url, at.is_subtechnique, at.parent_technique_id
+           FROM host_attack_techniques hat
+           JOIN attack_techniques at ON at.technique_id = hat.technique_id
+           WHERE hat.host_id = ?
+           ORDER BY hat.technique_id""",
+        (host_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def attack_matrix_data(conn, only_exposed=False):
+    """Ritorna {tactics: [...], techniques_by_tactic: {shortname: [...]}} con il
+    conteggio di host esposti per tecnica, per costruire la vista a matrice.
+    Se only_exposed=True, restituisce solo le tecniche con almeno un host esposto."""
+    tactics = [dict(r) for r in conn.execute(
+        "SELECT shortname, name, description, url, sort_order FROM attack_tactics ORDER BY sort_order"
+    )]
+
+    exposure = {}
+    for row in conn.execute(
+        """SELECT technique_id, COUNT(DISTINCT host_id) c
+           FROM host_attack_techniques GROUP BY technique_id"""
+    ):
+        exposure[row["technique_id"]] = row["c"]
+
+    techniques_by_tactic = {t["shortname"]: [] for t in tactics}
+    for row in conn.execute(
+        """SELECT tt.tactic_shortname, t.technique_id, t.name, t.url,
+                  t.is_subtechnique, t.parent_technique_id
+           FROM attack_technique_tactics tt
+           JOIN attack_techniques t ON t.technique_id = tt.technique_id
+           ORDER BY t.technique_id"""
+    ):
+        shortname = row["tactic_shortname"]
+        if shortname not in techniques_by_tactic:
+            continue
+        host_count = exposure.get(row["technique_id"], 0)
+        if only_exposed and host_count == 0:
+            continue
+        techniques_by_tactic[shortname].append({
+            "technique_id": row["technique_id"],
+            "name": row["name"],
+            "url": row["url"],
+            "is_subtechnique": bool(row["is_subtechnique"]),
+            "parent_technique_id": row["parent_technique_id"],
+            "host_count": host_count,
+        })
+
+    return {"tactics": tactics, "techniques_by_tactic": techniques_by_tactic}
+
+
+def hosts_for_technique(conn, technique_id):
+    rows = conn.execute(
+        """SELECT DISTINCT h.ip, h.device_type, hat.reason
+           FROM host_attack_techniques hat
+           JOIN hosts h ON h.id = hat.host_id
+           WHERE hat.technique_id = ?
+           ORDER BY h.ip""",
+        (technique_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def upsert_host(conn, host):

@@ -45,6 +45,15 @@
             {% endfor %}
           </select>
         </div>
+        <div class="col-md-3">
+          <label class="small text-muted mb-1">Sistema operativo (accuratezza)</label>
+          <select id="filterOsName" class="form-control form-control-sm">
+            <option value="">Tutti</option>
+            {% for o in os_names %}
+            <option value="{{ o.d }}">{{ o.d }}</option>
+            {% endfor %}
+          </select>
+        </div>
         <div class="col-md-3 d-flex align-items-end">
           <button id="clearFilters" type="button" class="btn btn-sm btn-outline-danger">
             <i class="fas fa-times"></i> Azzera filtri
@@ -86,6 +95,7 @@ $(function () {
       data: function (d) {
         d.device_type = $('#filterDeviceType').val();
         d.os_family = $('#filterOsFamily').val();
+        d.os_name = $('#filterOsName').val();
       }
     },
     columns: [
@@ -100,11 +110,11 @@ $(function () {
     ]
   });
 
-  $('#filterDeviceType, #filterOsFamily').on('change', function () {
+  $('#filterDeviceType, #filterOsFamily, #filterOsName').on('change', function () {
     table.ajax.reload();
   });
   $('#clearFilters').on('click', function () {
-    $('#filterDeviceType, #filterOsFamily').val('');
+    $('#filterDeviceType, #filterOsFamily, #filterOsName').val('');
     table.ajax.reload();
   });
 });
