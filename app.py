@@ -2,6 +2,7 @@
 
 import datetime
 import hashlib
+import json
 import math
 import os
 import platform
@@ -1265,7 +1266,11 @@ def api_nmap_scan_templates():
         name = (request.form.get("name") or "").strip()
         if not name:
             return jsonify({"ok": False, "reason": "Indica un nome per il template."}), 400
-        scan_templates.save_template(name, request.form.get("target"), request.form.get("args"))
+        try:
+            fields = json.loads(request.form.get("fields") or "{}")
+        except ValueError:
+            return jsonify({"ok": False, "reason": "Campo 'fields' non è JSON valido."}), 400
+        scan_templates.save_template(name, request.form.get("target"), request.form.get("args"), fields)
     return jsonify({"ok": True, "templates": scan_templates.list_templates()})
 
 

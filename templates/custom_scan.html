@@ -90,9 +90,9 @@
         </div>
       </div>
       <p class="small text-muted mb-0 mt-2">
-        "Salva" registra il target e tutte le opzioni impostate qui sotto (il comando risultante in
-        fondo alla pagina) con il nome indicato, sovrascrivendo un template esistente con lo stesso
-        nome. "Carica" applica un template azzerando prima le altre opzioni del form.
+        "Salva" registra lo stato ESATTO di ogni singolo campo del form qui sotto (non solo il
+        comando nmap risultante) con il nome indicato, sovrascrivendo un template esistente con lo
+        stesso nome. "Carica" ripristina un template campo per campo, azzerando quelli non salvati.
       </p>
     </div>
 
@@ -480,30 +480,45 @@ function customscanRefreshTemplates() {
     .catch(function () {});
 }
 
+// Tutti i controlli del form (checkbox/select/input), esclusi quelli di
+// gestione dei template stessi (classe cs-template-control) - usata sia
+// per raccogliere lo stato completo al salvataggio sia per ripristinarlo
+// al caricamento, così un template registra DAVVERO ogni opzione (non solo
+// il comando nmap risultante) e nessun controllo resta fuori per
+// dimenticanza quando in futuro se ne aggiungono di nuovi al form.
+function customscanAllFieldElements() {
+  return document.querySelectorAll(
+    '#customscanOptions input:not(.cs-template-control), #customscanOptions select:not(.cs-template-control)'
+  );
+}
+
+function customscanCollectFields() {
+  const state = {};
+  customscanAllFieldElements().forEach(function (el) {
+    if (!el.id) return;
+    state[el.id] = el.type === 'checkbox' ? el.checked : el.value;
+  });
+  return state;
+}
+
+function customscanApplyFields(fields) {
+  customscanAllFieldElements().forEach(function (el) {
+    if (!el.id) return;
+    const hasValue = Object.prototype.hasOwnProperty.call(fields || {}, el.id);
+    if (el.type === 'checkbox') {
+      el.checked = hasValue ? !!fields[el.id] : false;
+    } else {
+      el.value = hasValue ? fields[el.id] : '';
+    }
+  });
+  customscanComputeArgs();
+}
+
 document.getElementById('customscanTemplateLoadBtn').addEventListener('click', function () {
   const name = document.getElementById('customscanTemplateSelect').value;
   const tpl = customscanTemplates.find(function (t) { return t.name === name; });
   if (!tpl) { alert('Seleziona un template da caricare.'); return; }
-
-  // Azzera tutte le opzioni discrete del form (tranne i controlli dei
-  // template stessi, marcati con la classe cs-template-control) prima di
-  // applicare il template: l'intero target/args salvato sostituisce lo
-  // stato corrente invece di combinarsi con esso (evita, es., un -T
-  // duplicato tra un controllo discreto rimasto impostato e quello dentro
-  // il template salvato).
-  document.querySelectorAll('#customscanOptions input[type=checkbox]').forEach(function (el) {
-    el.checked = false;
-  });
-  document.querySelectorAll('#customscanOptions select:not(.cs-template-control)').forEach(function (el) {
-    el.value = '';
-  });
-  document.querySelectorAll(
-    '#customscanOptions input[type=text]:not(.cs-template-control), #customscanOptions input[type=number]'
-  ).forEach(function (el) { el.value = ''; });
-
-  document.getElementById('customscanTarget').value = tpl.target || '';
-  document.getElementById('customscanExtraArgs').value = tpl.args || '';
-  customscanComputeArgs();
+  customscanApplyFields(tpl.fields);
 });
 
 document.getElementById('customscanTemplateDeleteBtn').addEventListener('click', function () {
@@ -528,6 +543,7 @@ document.getElementById('customscanTemplateSaveBtn').addEventListener('click', f
   body.set('name', name);
   body.set('target', document.getElementById('customscanTarget').value.trim());
   body.set('args', document.getElementById('customscanArgsPreview').value);
+  body.set('fields', JSON.stringify(customscanCollectFields()));
   fetch("{{ url_for('api_nmap_scan_templates') }}", { method: 'POST', body: body })
     .then(function (r) { return r.json(); })
     .then(function (d) {
