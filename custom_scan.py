@@ -33,6 +33,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import enrich
 import nmap_parser
 import nmap_proxy_client
 import scan_pipeline
@@ -132,6 +133,23 @@ def expand_targets(target, extra_args_str, timeout=120):
         xml_path.unlink(missing_ok=True)
 
 
+def _enrich_and_store(conn, host):
+    """Raccoglie le stesse evidenze extra usate per la classificazione AI
+    (banner HTTP, condivisioni SMB, banner TCP grezzi — vedi enrich.py) per
+    UN host già registrato, e le salva subito invece di aspettare che uno
+    finisca per calcolarle solo transitoriamente. A differenza di
+    classify_devices.py (che chiama enrich_host una volta per gruppo di
+    host con fingerprint identico, per limitare le richieste) qui viene
+    chiamata per ogni singolo host trovato: una Scansione nmap personalizzata
+    è per sua natura mirata/su pochi host, non l'intera rete."""
+    try:
+        evidence = enrich.enrich_host(host["ip"], host["services"])
+    except Exception as e:
+        evidence = {"error": str(e)}
+    scanner_db.set_host_enrichment(conn, host["id"], evidence)
+    return evidence
+
+
 def _run_batch(cmd, xml_out, conn, target_count, timeout):
     result = scan_pipeline.run_and_store(cmd, xml_out, conn, target_count=target_count, timeout=timeout)
     if result["status"] == "timeout":
@@ -140,6 +158,10 @@ def _run_batch(cmd, xml_out, conn, target_count, timeout):
         print(f"Errore durante la scansione: {result['error_detail']}", flush=True)
     for host in result["hosts_up"]:
         print(f"  {host['ip']}: {len(host['services'])} servizi, tipo dedotto '{host['device_type']}'", flush=True)
+        if any(s.get("state") == "open" for s in host["services"]):
+            evidence = _enrich_and_store(conn, host)
+            if evidence:
+                print(f"    arricchito: {', '.join(evidence.keys())}", flush=True)
     return result
 
 

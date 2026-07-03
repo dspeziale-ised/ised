@@ -40,10 +40,11 @@ def run_and_store(cmd, xml_out, conn, target_count=None, timeout=None):
     batch/scansione fallita non compromette il resto di un run più ampio.
 
     Ritorna {'status', 'hosts_found', 'hosts_up': [host, ...], 'error_detail'}
-    — hosts_up contiene i dict host così come upsertati (device_type
-    incluso), utile ai chiamanti che vogliono stampare un riepilogo per
-    host; error_detail è il messaggio dell'eccezione se status == 'error'
-    (None altrimenti), utile ai chiamanti che vogliono loggarlo."""
+    — hosts_up contiene i dict host così come upsertati (device_type e id
+    del record DB inclusi), utile ai chiamanti che vogliono stampare un
+    riepilogo per host o arricchirlo ulteriormente (es. custom_scan.py);
+    error_detail è il messaggio dell'eccezione se status == 'error' (None
+    altrimenti), utile ai chiamanti che vogliono loggarlo."""
     # -v: nessun effetto sull'XML (-oX resta l'unica fonte usata per parsing/
     # host), ma fa stampare a nmap il riepilogo testuale con "Raw packets
     # sent/Rcvd" usato per il traffico in dashboard (vedi
@@ -101,7 +102,7 @@ def run_and_store(cmd, xml_out, conn, target_count=None, timeout=None):
         host["device_vendor"] = device_vendor
         host["last_scanned"] = finished
         host["raw_xml_path"] = str(xml_out)
-        scanner_db.upsert_host(conn, host)
+        host["id"] = scanner_db.upsert_host(conn, host)
         hosts_up.append(host)
 
     if target_count is None:

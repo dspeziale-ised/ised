@@ -393,6 +393,7 @@ def init_db(conn):
     ensure_service_columns(conn)
     ensure_fingerprint_columns(conn)
     ensure_traffic_columns(conn)
+    ensure_enrichment_columns(conn)
 
 
 AI_COLUMNS = {
@@ -415,6 +416,17 @@ SERVICE_COLUMNS = {
 FINGERPRINT_COLUMNS = {
     "status_reason": "TEXT",
     "ttl": "INTEGER",
+}
+
+# Evidenze extra (banner HTTP, condivisioni SMB, banner TCP grezzi — vedi
+# enrich.py) raccolte per un host, serializzate come JSON. Le stesse usate
+# come contesto per la classificazione AI (classify_devices.py), ma qui
+# raccolte e persistite subito dopo che una Scansione nmap personalizzata
+# registra l'host (vedi custom_scan.py), invece di essere ricalcolate solo
+# al momento (e solo transitoriamente) di un'eventuale classificazione AI
+# successiva.
+ENRICHMENT_COLUMNS = {
+    "enrichment_json": "TEXT",
 }
 
 
@@ -475,6 +487,39 @@ def ensure_fingerprint_columns(conn):
             added = True
     if added:
         conn.commit()
+
+
+def ensure_enrichment_columns(conn):
+    """Aggiunge enrichment_json su hosts se non esiste già (migrazione
+    additiva e idempotente, sicura su un DB già popolato)."""
+    existing = _get_columns(conn, "hosts")
+    added = False
+    for col, col_type in ENRICHMENT_COLUMNS.items():
+        if col not in existing:
+            conn.execute(f"ALTER TABLE hosts ADD COLUMN {col} {col_type}")
+            added = True
+    if added:
+        conn.commit()
+
+
+def set_host_enrichment(conn, host_id, evidence):
+    """Salva le evidenze extra (vedi enrich.enrich_host) raccolte per un
+    host. Un dict vuoto viene comunque salvato (distingue "arricchito ma
+    senza evidenze rilevanti" da "mai arricchito", quest'ultimo NULL)."""
+    conn.execute(
+        "UPDATE hosts SET enrichment_json = ? WHERE id = ?",
+        (json.dumps(evidence), host_id),
+    )
+    conn.commit()
+
+
+def get_host_enrichment(conn, host_id):
+    """Ritorna il dict di evidenze extra salvato per un host, o None se non
+    è mai stato arricchito."""
+    row = conn.execute("SELECT enrichment_json FROM hosts WHERE id = ?", (host_id,)).fetchone()
+    if not row or not row["enrichment_json"]:
+        return None
+    return json.loads(row["enrichment_json"])
 
 
 def normalize_device_types(conn):

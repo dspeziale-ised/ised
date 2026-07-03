@@ -4,36 +4,42 @@
 {% block breadcrumb %}<li class="breadcrumb-item active">Dashboard</li>{% endblock %}
 
 {% block content %}
-<div class="card card-outline card-warning mb-3">
-  <div class="card-body py-2 d-flex align-items-center flex-wrap">
-    <span class="mr-2"><i class="fas fa-gauge-high"></i> <strong>Effort di rete globale:</strong></span>
-    <span class="badge badge-{{ 'success' if effort_level == 'low' else ('warning' if effort_level == 'normal' else 'danger') }} mr-3"
-          id="effortCurrentBadge">{{ effort_profile.label }}</span>
-    <div class="btn-group btn-group-sm mr-3" role="group" id="effortLevelGroup">
-      {% for p in effort_profiles %}
-      <button type="button" class="btn {{ 'btn-primary' if p.level == effort_level else 'btn-outline-secondary' }} effort-level-btn"
-              data-level="{{ p.level }}">{{ p.label }}</button>
-      {% endfor %}
+<div class="row">
+  <div class="col-lg-6">
+    <div class="card card-outline card-warning mb-3 h-100">
+      <div class="card-body py-2 d-flex align-items-center flex-wrap">
+        <span class="mr-2 text-nowrap"><i class="fas fa-gauge-high"></i> <strong>Effort di rete globale:</strong></span>
+        <span class="badge badge-{{ 'success' if effort_level == 'low' else ('warning' if effort_level == 'normal' else 'danger') }} mr-3"
+              id="effortCurrentBadge">{{ effort_profile.label }}</span>
+        <div class="btn-group btn-group-sm mr-3" role="group" id="effortLevelGroup">
+          {% for p in effort_profiles %}
+          <button type="button" class="btn {{ 'btn-primary' if p.level == effort_level else 'btn-outline-secondary' }} effort-level-btn"
+                  data-level="{{ p.level }}">{{ p.label }}</button>
+          {% endfor %}
+        </div>
+        <small class="text-muted" id="effortDescription">{{ effort_profile.description }}</small>
+        <a href="{{ url_for('admin_panel') }}" class="btn btn-sm btn-outline-secondary ml-auto">
+          <i class="fas fa-sliders"></i> Dettagli
+        </a>
+      </div>
     </div>
-    <small class="text-muted" id="effortDescription">{{ effort_profile.description }}</small>
-    <a href="{{ url_for('admin_panel') }}" class="btn btn-sm btn-outline-secondary ml-auto">
-      <i class="fas fa-sliders"></i> Dettagli
-    </a>
   </div>
-</div>
 
-<div class="card card-outline card-info mb-3">
-  <div class="card-body py-2 d-flex align-items-center flex-wrap">
-    <span class="mr-3"><i class="fas fa-spinner"></i> <strong>Scansioni in corso:</strong></span>
-    <span class="mr-3 text-nowrap">Discovery <span class="badge job-status-badge ml-1" data-job="discovery"></span></span>
-    <span class="mr-3 text-nowrap">Aggiorna scansione <span class="badge job-status-badge ml-1" data-job="rescan"></span></span>
-    <span class="mr-3 text-nowrap">Classificazione AI <span class="badge job-status-badge ml-1" data-job="classify"></span></span>
-    <span class="mr-3 text-nowrap">Vulnerabilità <span class="badge job-status-badge ml-1" data-job="vuln"></span></span>
-    <span class="mr-3 text-nowrap">MITRE ATT&amp;CK <span class="badge job-status-badge ml-1" data-job="attack"></span></span>
-    <span class="mr-3 text-nowrap">Scansione nmap <span class="badge job-status-badge ml-1" data-job="customscan"></span></span>
-    <a href="{{ url_for('scans_list') }}" class="btn btn-sm btn-outline-secondary ml-auto">
-      <i class="fas fa-history"></i> Log scansioni
-    </a>
+  <div class="col-lg-6">
+    <div class="card card-outline card-info mb-3 h-100">
+      <div class="card-body py-2 d-flex align-items-center flex-wrap">
+        <span class="mr-3 text-nowrap"><i class="fas fa-spinner"></i> <strong>Scansioni in corso:</strong></span>
+        <span class="mr-3 text-nowrap">Discovery <span class="badge job-status-badge ml-1" data-job="discovery"></span></span>
+        <span class="mr-3 text-nowrap">Aggiorna scansione <span class="badge job-status-badge ml-1" data-job="rescan"></span></span>
+        <span class="mr-3 text-nowrap">Classificazione AI <span class="badge job-status-badge ml-1" data-job="classify"></span></span>
+        <span class="mr-3 text-nowrap">Vulnerabilità <span class="badge job-status-badge ml-1" data-job="vuln"></span></span>
+        <span class="mr-3 text-nowrap">MITRE ATT&amp;CK <span class="badge job-status-badge ml-1" data-job="attack"></span></span>
+        <span class="mr-3 text-nowrap">Scansione nmap <span class="badge job-status-badge ml-1" data-job="customscan"></span></span>
+        <a href="{{ url_for('scans_list') }}" class="btn btn-sm btn-outline-secondary ml-auto">
+          <i class="fas fa-history"></i> Log scansioni
+        </a>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -51,10 +57,10 @@
   </div>
   <div class="card-body py-2">
     <div class="row">
-      <div class="col-md-8">
+      <div class="col-md-6">
         <canvas id="trafficChart" style="max-height:130px"></canvas>
       </div>
-      <div class="col-md-4">
+      <div class="col-md-6">
         <canvas id="connChart" style="max-height:130px"></canvas>
       </div>
     </div>

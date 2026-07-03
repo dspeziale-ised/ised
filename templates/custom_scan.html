@@ -6,7 +6,8 @@
 {% block extra_css %}
 <style>
   .op-log {
-    max-height: 380px;
+    max-height: 65vh;
+    min-height: 300px;
     overflow-y: auto;
     background: #212529;
     color: #e9ecef;
@@ -48,13 +49,25 @@
 </p>
 
 <div class="card card-outline card-primary">
-  <div class="card-header">
-    <h3 class="card-title"><i class="fas fa-satellite-dish"></i> Configurazione scansione</h3>
-    <div class="card-tools">
-      <span class="badge job-status-badge" data-job="customscan"></span>
-    </div>
+  <div class="card-header p-0 border-bottom-0">
+    <ul class="nav nav-tabs" id="customscanTabs" role="tablist">
+      <li class="nav-item">
+        <a class="nav-link active" id="tab-customscan-config-btn" data-toggle="tab" href="#tab-customscan-config" role="tab">
+          <i class="fas fa-satellite-dish"></i> Configurazione scansione
+        </a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link" id="tab-customscan-log-btn" data-toggle="tab" href="#tab-customscan-log" role="tab">
+          <i class="fas fa-terminal"></i> Log
+          <span class="badge job-status-badge ml-1" data-job="customscan"></span>
+        </a>
+      </li>
+    </ul>
   </div>
-  <div class="card-body" id="customscanOptions">
+  <div class="card-body p-0">
+    <div class="tab-content" id="customscanTabsContent">
+      <div class="tab-pane fade show active p-3" id="tab-customscan-config" role="tabpanel">
+  <div id="customscanOptions">
 
     <div class="cs-section">
       <h6 class="text-primary"><i class="fas fa-bookmark"></i> Template di scansione</h6>
@@ -356,13 +369,19 @@
     <button class="btn btn-outline-danger job-stop-btn mb-2" data-job="customscan" style="display:none;">
       <i class="fas fa-stop"></i> Interrompi
     </button>
-    <p class="small text-muted">
+    <p class="small text-muted mb-0">
       I risultati vengono scritti/aggiornati direttamente negli <a href="{{ url_for('hosts_list') }}">host</a>
       non appena la scansione termina, con lo stesso meccanismo di classificazione automatica delle altre
-      scansioni. Consulta anche il <a href="{{ url_for('scans_list') }}">Log Scansioni</a>.
+      scansioni. Consulta anche il <a href="{{ url_for('scans_list') }}">Log Scansioni</a>. Il log
+      dell'esecuzione è nella tab "Log" qui sopra.
     </p>
-    <h6 class="text-muted">Log</h6>
-    <pre class="op-log job-log" data-job="customscan"></pre>
+  </div>
+      </div>
+
+      <div class="tab-pane fade p-3" id="tab-customscan-log" role="tabpanel">
+        <pre class="op-log job-log" data-job="customscan"></pre>
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}

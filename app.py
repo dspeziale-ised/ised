@@ -854,11 +854,12 @@ def host_detail(ip):
     ).fetchall()
     attack_techniques = scanner_db.get_host_attack_techniques(db, host["id"])
     ttl_baseline, ttl_hops = classify.guess_ttl_baseline(host["ttl"])
+    enrichment = scanner_db.get_host_enrichment(db, host["id"])
     return render_template(
         "host_detail.html", host=host, os_matches=os_matches, services=services,
         device_type_options=sorted(DEVICE_COLOR.keys()), roles=roles,
         vulnerabilities=vulnerabilities, attack_techniques=attack_techniques,
-        ttl_baseline=ttl_baseline, ttl_hops=ttl_hops,
+        ttl_baseline=ttl_baseline, ttl_hops=ttl_hops, enrichment=enrichment,
     )
 
 

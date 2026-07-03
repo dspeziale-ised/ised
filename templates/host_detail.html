@@ -188,6 +188,42 @@
       </div>
     </div>
 
+    {% if enrichment is not none %}
+    <div class="card card-outline card-info">
+      <div class="card-header">
+        <h3 class="card-title"><i class="fas fa-magnifying-glass"></i> Evidenze aggiuntive ({{ enrichment|length }})</h3>
+      </div>
+      <div class="card-body">
+        {% if not enrichment %}
+        <p class="text-muted mb-0 small">Nessuna evidenza extra rilevante (nessun servizio HTTP/SMB/non identificato tra le porte aperte).</p>
+        {% else %}
+        {% for key, value in enrichment.items() %}
+        <div class="mb-3">
+          <h6 class="text-muted">{{ key }}</h6>
+          {% if value is mapping %}
+          <table class="table table-sm table-borderless mb-0">
+            {% for subkey, subval in value.items() %}
+            <tr>
+              <td class="text-muted small" style="width:160px;">{{ subkey }}</td>
+              <td class="small"><pre class="mb-0" style="white-space:pre-wrap;">{{ subval }}</pre></td>
+            </tr>
+            {% endfor %}
+          </table>
+          {% else %}
+          <pre class="small mb-0" style="white-space:pre-wrap;">{{ value }}</pre>
+          {% endif %}
+        </div>
+        {% endfor %}
+        {% endif %}
+        <p class="text-muted small mb-0">
+          <i class="fas fa-circle-info"></i> Banner HTTP/SMB/TCP raccolti automaticamente dopo una
+          Scansione nmap personalizzata (le stesse evidenze usate come contesto per la
+          Classificazione AI).
+        </p>
+      </div>
+    </div>
+    {% endif %}
+
     <div class="card card-outline card-danger">
       <div class="card-header">
         <h3 class="card-title"><i class="fas fa-bug"></i> Vulnerabilità note ({{ vulnerabilities|length }})</h3>
