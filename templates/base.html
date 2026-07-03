@@ -68,54 +68,93 @@
   </a>
   <div class="sidebar">
     <nav class="mt-2">
-      <ul class="nav nav-pills nav-sidebar flex-column" data-widget="treeview" role="menu">
+      {% set inventory_endpoints = ['hosts_list', 'host_detail', 'services_list', 'service_hosts', 'network_map'] %}
+      {% set security_endpoints = ['vulnerabilities_list', 'attack_matrix'] %}
+      {% set system_endpoints = ['scans_list', 'admin_panel'] %}
+      <ul class="nav nav-pills nav-sidebar flex-column" data-widget="treeview" role="menu" data-accordion="false">
         <li class="nav-item">
           <a href="{{ url_for('dashboard') }}" class="nav-link {{ 'active' if request.endpoint == 'dashboard' else '' }}">
             <i class="nav-icon fas fa-tachometer-alt"></i>
             <p>Dashboard</p>
           </a>
         </li>
-        <li class="nav-item">
-          <a href="{{ url_for('hosts_list') }}" class="nav-link {{ 'active' if request.endpoint in ['hosts_list', 'host_detail'] else '' }}">
-            <i class="nav-icon fas fa-desktop"></i>
-            <p>Host</p>
+
+        <li class="nav-item {{ 'menu-open' if request.endpoint in inventory_endpoints else '' }}">
+          <a href="#" class="nav-link {{ 'active' if request.endpoint in inventory_endpoints else '' }}">
+            <i class="nav-icon fas fa-boxes-stacked"></i>
+            <p>
+              Inventario
+              <i class="right fas fa-angle-left"></i>
+            </p>
           </a>
+          <ul class="nav nav-treeview">
+            <li class="nav-item">
+              <a href="{{ url_for('hosts_list') }}" class="nav-link {{ 'active' if request.endpoint in ['hosts_list', 'host_detail'] else '' }}">
+                <i class="nav-icon fas fa-desktop"></i>
+                <p>Host</p>
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="{{ url_for('services_list') }}" class="nav-link {{ 'active' if request.endpoint in ['services_list', 'service_hosts'] else '' }}">
+                <i class="nav-icon fas fa-plug"></i>
+                <p>Servizi</p>
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="{{ url_for('network_map') }}" class="nav-link {{ 'active' if request.endpoint == 'network_map' else '' }}">
+                <i class="nav-icon fas fa-sitemap"></i>
+                <p>Mappa di rete</p>
+              </a>
+            </li>
+          </ul>
         </li>
-        <li class="nav-item">
-          <a href="{{ url_for('services_list') }}" class="nav-link {{ 'active' if request.endpoint in ['services_list', 'service_hosts'] else '' }}">
-            <i class="nav-icon fas fa-plug"></i>
-            <p>Servizi</p>
+
+        <li class="nav-item {{ 'menu-open' if request.endpoint in security_endpoints else '' }}">
+          <a href="#" class="nav-link {{ 'active' if request.endpoint in security_endpoints else '' }}">
+            <i class="nav-icon fas fa-shield-halved"></i>
+            <p>
+              Sicurezza
+              <i class="right fas fa-angle-left"></i>
+            </p>
           </a>
+          <ul class="nav nav-treeview">
+            <li class="nav-item">
+              <a href="{{ url_for('vulnerabilities_list') }}" class="nav-link {{ 'active' if request.endpoint == 'vulnerabilities_list' else '' }}">
+                <i class="nav-icon fas fa-bug"></i>
+                <p>Vulnerabilità</p>
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="{{ url_for('attack_matrix') }}" class="nav-link {{ 'active' if request.endpoint == 'attack_matrix' else '' }}">
+                <i class="nav-icon fas fa-crosshairs"></i>
+                <p>Matrice ATT&amp;CK</p>
+              </a>
+            </li>
+          </ul>
         </li>
-        <li class="nav-item">
-          <a href="{{ url_for('network_map') }}" class="nav-link {{ 'active' if request.endpoint == 'network_map' else '' }}">
-            <i class="nav-icon fas fa-sitemap"></i>
-            <p>Mappa di rete</p>
+
+        <li class="nav-item {{ 'menu-open' if request.endpoint in system_endpoints else '' }}">
+          <a href="#" class="nav-link {{ 'active' if request.endpoint in system_endpoints else '' }}">
+            <i class="nav-icon fas fa-toolbox"></i>
+            <p>
+              Sistema
+              <i class="right fas fa-angle-left"></i>
+            </p>
           </a>
-        </li>
-        <li class="nav-item">
-          <a href="{{ url_for('vulnerabilities_list') }}" class="nav-link {{ 'active' if request.endpoint == 'vulnerabilities_list' else '' }}">
-            <i class="nav-icon fas fa-bug"></i>
-            <p>Vulnerabilità</p>
-          </a>
-        </li>
-        <li class="nav-item">
-          <a href="{{ url_for('attack_matrix') }}" class="nav-link {{ 'active' if request.endpoint == 'attack_matrix' else '' }}">
-            <i class="nav-icon fas fa-crosshairs"></i>
-            <p>Matrice ATT&amp;CK</p>
-          </a>
-        </li>
-        <li class="nav-item">
-          <a href="{{ url_for('scans_list') }}" class="nav-link {{ 'active' if request.endpoint == 'scans_list' else '' }}">
-            <i class="nav-icon fas fa-history"></i>
-            <p>Log Scansioni</p>
-          </a>
-        </li>
-        <li class="nav-item">
-          <a href="{{ url_for('admin_panel') }}" class="nav-link {{ 'active' if request.endpoint == 'admin_panel' else '' }}">
-            <i class="nav-icon fas fa-user-shield"></i>
-            <p>Amministrazione</p>
-          </a>
+          <ul class="nav nav-treeview">
+            <li class="nav-item">
+              <a href="{{ url_for('scans_list') }}" class="nav-link {{ 'active' if request.endpoint == 'scans_list' else '' }}">
+                <i class="nav-icon fas fa-history"></i>
+                <p>Log Scansioni</p>
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="{{ url_for('admin_panel') }}" class="nav-link {{ 'active' if request.endpoint == 'admin_panel' else '' }}">
+                <i class="nav-icon fas fa-user-shield"></i>
+                <p>Amministrazione</p>
+              </a>
+            </li>
+          </ul>
         </li>
       </ul>
     </nav>

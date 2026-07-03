@@ -17,7 +17,7 @@
     .\nmap-discovery-10net.ps1 -BatchSize 16 -OutputDir C:\scans
 #>
 param (
-    [int]$BatchSize    = 8,
+    [int]$BatchSize    = 16,
     [string]$OutputDir = ".\nmap_xml",
     [string]$NmapPath  = "nmap"
 )
