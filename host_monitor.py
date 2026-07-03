@@ -20,6 +20,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import nmap_proxy_client
+import scan_effort
 import scanner_db
 from job_lock import JobLock
 
@@ -53,15 +54,21 @@ def _parse_up_ips(xml_bytes):
     return up
 
 
-def ping_sweep(ips, timeout=120):
+def ping_sweep(ips, timeout=120, timing=None):
     """Esegue nmap -sn su un batch di IP, ritorna il set di IP risultati up.
-    Punto di innesto per il proxy nmap (in ambiente containerizzato senza
-    nmap locale, questa funzione verrà sostituita da una chiamata HTTP)."""
+    'timing' (-T0..-T5) di default segue l'effort di rete globale
+    (scan_effort.py): il monitoraggio gira in automatico in background,
+    senza un form per sceglierlo scansione per scansione, quindi è l'unico
+    posto dove l'effort è letto direttamente invece di essere solo un
+    default pre-compilato in un form."""
     if not ips:
         return set()
+    if timing is None:
+        timing = scan_effort.current_profile()["monitor_timing"]
     try:
         result = nmap_proxy_client.run_nmap(
-            ["-sn", "-n", "-oX", "-", *ips], capture_output=True, text=False, timeout=timeout,
+            ["-sn", "-n", f"-T{timing}", "-oX", "-", *ips],
+            capture_output=True, text=False, timeout=timeout,
         )
     except (subprocess.TimeoutExpired, OSError) as e:
         print(f"  [!] Errore/timeout ping-sweep su batch di {len(ips)} host: {e}")
@@ -75,10 +82,11 @@ def run_monitor_cycle(conn, batch_size=DEFAULT_BATCH_SIZE, heartbeat_minutes=DEF
     hosts = conn.execute("SELECT id, ip FROM hosts ORDER BY ip").fetchall()
     now_str = datetime.now().isoformat(timespec="seconds")
     up_count = down_count = written = 0
+    timing = scan_effort.current_profile()["monitor_timing"]
 
     for i in range(0, len(hosts), batch_size):
         batch = hosts[i:i + batch_size]
-        up_ips = ping_sweep([h["ip"] for h in batch])
+        up_ips = ping_sweep([h["ip"] for h in batch], timing=timing)
         for h in batch:
             status = "up" if h["ip"] in up_ips else "down"
             if status == "up":

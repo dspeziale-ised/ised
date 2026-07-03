@@ -31,6 +31,10 @@ def main():
     parser.add_argument("--timing", choices=["1", "2", "3", "4", "5"],
                          help="Timing template nmap -T1..-T5 per scan_and_store.py "
                               "(default 4 se non indicato: vedi scan_and_store.py)")
+    parser.add_argument("--top-ports", type=int,
+                         help="Numero di porte da scansionare per host (default 200 se non "
+                              "indicato: vedi scan_and_store.py) - un numero più basso riduce "
+                              "il traffico generato per host")
     args = parser.parse_args()
 
     with JobLock(LOCK_FILE):
@@ -51,6 +55,8 @@ def main():
         ]
         if args.timing:
             scan_cmd += ["--timing", args.timing]
+        if args.top_ports:
+            scan_cmd += ["--top-ports", str(args.top_ports)]
         run(scan_cmd)
 
         print("== Completato ==", flush=True)

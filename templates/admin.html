@@ -24,6 +24,30 @@
   automatizza da qui: nessun comando da terminale.
 </p>
 
+<div class="card card-outline card-warning">
+  <div class="card-header">
+    <h3 class="card-title"><i class="fas fa-gauge-high"></i> Effort di rete globale</h3>
+  </div>
+  <div class="card-body">
+    <p class="small text-muted mb-2">
+      Un'unica leva che orchestra quanto sono discrete <strong>tutte</strong> le attività verso la
+      rete: il monitoraggio periodico e il fallback vulnerabilità la seguono automaticamente (non
+      hanno un form dedicato), mentre Discovery/Aggiorna scansione/Scansione nmap la usano come
+      valore pre-compilato nei rispettivi form, restando comunque modificabile per la singola
+      esecuzione.
+    </p>
+    <div class="btn-group" role="group" id="effortLevelGroup">
+      {% for p in effort_profiles %}
+      <button type="button" class="btn {{ 'btn-primary' if p.level == effort_level else 'btn-outline-secondary' }} effort-level-btn"
+              data-level="{{ p.level }}">
+        {{ p.label }}
+      </button>
+      {% endfor %}
+    </div>
+    <p class="small text-muted mt-2 mb-0" id="effortDescription">{{ effort_profile.description }}</p>
+  </div>
+</div>
+
 <div class="card card-outline card-primary">
   <div class="card-header p-0 border-bottom-0">
     <ul class="nav nav-tabs" id="opsTabs" role="tablist">
@@ -84,19 +108,19 @@
         <div class="form-row mb-2">
           <div class="col-md-3">
             <label class="small text-muted mb-1">Job paralleli (thread contemporanei)</label>
-            <input type="number" min="1" max="64" step="1" class="form-control form-control-sm" id="discoveryBatchSize" value="8">
+            <input type="number" min="1" max="64" step="1" class="form-control form-control-sm" id="discoveryBatchSize" value="{{ effort_profile.discovery_batch_size }}">
           </div>
           <div class="col-md-3">
             <label class="small text-muted mb-1">Timing nmap</label>
             <select class="form-control form-control-sm" id="discoveryTiming">
-              <option value="3">T3 - Normal</option>
-              <option value="4" selected>T4 - Aggressive (default)</option>
-              <option value="5">T5 - Insane (massima velocità, molto invasivo)</option>
+              <option value="3" {{ 'selected' if effort_profile.discovery_timing == '3' else '' }}>T3 - Normal</option>
+              <option value="4" {{ 'selected' if effort_profile.discovery_timing == '4' else '' }}>T4 - Aggressive (default)</option>
+              <option value="5" {{ 'selected' if effort_profile.discovery_timing == '5' else '' }}>T5 - Insane (massima velocità, molto invasivo)</option>
             </select>
           </div>
           <div class="col-md-3">
             <label class="small text-muted mb-1">Max pacchetti/sec (0 = nessun limite)</label>
-            <input type="number" min="0" step="10" class="form-control form-control-sm" id="discoveryMaxRate" value="0" placeholder="es. 100">
+            <input type="number" min="0" step="10" class="form-control form-control-sm" id="discoveryMaxRate" value="{{ effort_profile.discovery_max_rate }}" placeholder="es. 100">
           </div>
           <div class="col-md-3">
             <label class="small text-muted mb-1">Cartella output XML</label>
@@ -164,13 +188,18 @@
           <div class="col-md-4">
             <label class="small text-muted mb-1">Effort / Timing nmap (OS + servizi)</label>
             <select class="form-control form-control-sm" id="rescanTiming">
-              <option value="1">T1 - Sneaky (basso impatto)</option>
-              <option value="2">T2 - Polite (impatto ridotto, consigliato per firewall sensibili)</option>
-              <option value="3">T3 - Normal</option>
-              <option value="4" selected>T4 - Aggressive (default)</option>
-              <option value="5">T5 - Insane (massima velocità, molto invasivo)</option>
+              <option value="1" {{ 'selected' if effort_profile.rescan_timing == '1' else '' }}>T1 - Sneaky (basso impatto)</option>
+              <option value="2" {{ 'selected' if effort_profile.rescan_timing == '2' else '' }}>T2 - Polite (impatto ridotto, consigliato per firewall sensibili)</option>
+              <option value="3" {{ 'selected' if effort_profile.rescan_timing == '3' else '' }}>T3 - Normal</option>
+              <option value="4" {{ 'selected' if effort_profile.rescan_timing == '4' else '' }}>T4 - Aggressive (default)</option>
+              <option value="5" {{ 'selected' if effort_profile.rescan_timing == '5' else '' }}>T5 - Insane (massima velocità, molto invasivo)</option>
             </select>
             <small class="text-muted">Valori bassi riducono il rate di probe per non affaticare firewall/IDS, a costo di una scansione più lenta.</small>
+          </div>
+          <div class="col-md-3">
+            <label class="small text-muted mb-1">Porte da scansionare per host</label>
+            <input type="number" min="1" max="65535" step="1" class="form-control form-control-sm" id="rescanTopPorts" value="{{ effort_profile.rescan_top_ports }}">
+            <small class="text-muted">Meno porte = meno traffico per host.</small>
           </div>
         </div>
         <button class="btn btn-primary job-start-btn mb-3" data-job="rescan" {{ 'disabled' if jobs_running.rescan else '' }}>
@@ -453,6 +482,30 @@
 
 {% block extra_js %}
 <script>
+const EFFORT_DESCRIPTIONS = {
+  {% for p in effort_profiles %}"{{ p.level }}": {{ p.description|tojson }},{% endfor %}
+};
+document.querySelectorAll('.effort-level-btn').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    document.querySelectorAll('.effort-level-btn').forEach(function (b) {
+      b.classList.remove('btn-primary');
+      b.classList.add('btn-outline-secondary');
+    });
+    btn.classList.remove('btn-outline-secondary');
+    btn.classList.add('btn-primary');
+    document.getElementById('effortDescription').textContent = EFFORT_DESCRIPTIONS[btn.dataset.level] || '';
+    const body = new URLSearchParams();
+    body.set('level', btn.dataset.level);
+    fetch("{{ url_for('api_scan_effort') }}", { method: 'POST', body: body })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { alert(d.reason || 'Errore.'); return; }
+        location.reload();
+      })
+      .catch(function () { alert('Errore di rete.'); });
+  });
+});
+
 {% include "_jobs_script.html" %}
 initJobWidgets({
   discovery: { fields: [
@@ -464,6 +517,7 @@ initJobWidgets({
   ] },
   rescan: { forceCheckbox: null, fields: [
     { id: 'rescanTiming', param: 'timing' },
+    { id: 'rescanTopPorts', param: 'top_ports' },
   ] },
   classify: { forceCheckbox: 'classifyForceCheck' },
   vuln: { forceCheckbox: 'vulnForceCheck' },

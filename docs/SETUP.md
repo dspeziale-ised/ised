@@ -78,6 +78,16 @@ ATT&CK** (mappatura euristica locale, ricalcolata sempre per tutti gli
 host — nessun costo/rate-limit esterno oltre al download iniziale) e il
 **Monitoraggio** (ciclo periodico continuo, non un job one-shot).
 
+Dalla pagina **Inventario → Scansione nmap** si può inoltre lanciare in
+qualsiasi momento una scansione nmap libera (target + opzioni a scelta),
+con i risultati salvati negli host come le altre scansioni.
+
+**Effort di rete globale**: in cima ad Amministrazione, tre pulsanti
+Debole/Normale/Fast orchestrano quanto sono discrete tutte le attività di
+scansione (monitoraggio e fallback vulnerabilità lo seguono in automatico;
+discovery/rescan/scansione nmap lo usano come default pre-compilato nel
+form, sempre modificabile per la singola esecuzione).
+
 ## Reset completo
 
 Per ripartire da una situazione pulita:

@@ -28,10 +28,10 @@ background con log/stop, non blocca l'interfaccia.
 
 ## Il meccanismo "job" (background task da UI)
 
-Cinque operazioni lunghe (`discovery`, `rescan`, `classify`, `vuln`,
-`attack`) sono gestite da un meccanismo comune in `app.py`:
+Sei operazioni lunghe (`discovery`, `rescan`, `classify`, `vuln`, `attack`,
+`customscan`) sono gestite da un meccanismo comune in `app.py`:
 
-- `JOBS = {"discovery": {...}, "rescan": {...}, "classify": {...}, "vuln": {...}, "attack": {...}}`
+- `JOBS = {"discovery": {...}, "rescan": {...}, "classify": {...}, "vuln": {...}, "attack": {...}, "customscan": {...}}`
   — per ciascuna: comando da eseguire, file di lock, file di log
 - `start_job(name)` — se non già in corso, lancia lo script come
   `subprocess.Popen` in background, scrivendo stdout/stderr su un file di
@@ -62,6 +62,9 @@ Cinque operazioni lunghe (`discovery`, `rescan`, `classify`, `vuln`,
   costruiscono gli argomenti CLI dai campi del form (es. BatchSize/OutputDir
   per discovery); `JOB_FORCE_FLAG` traduce il checkbox "force" generico nel
   flag corretto per lo script (`--force`, o `--update-matrix` per `attack`)
+- `JOB_VALIDATORS` (es. `customscan`, che richiede un target obbligatorio):
+  eseguiti **prima** di `start_job`, ritornano un messaggio d'errore invece
+  di far partire un processo condannato a fallire subito
 - Frontend: `templates/_jobs_script.html` (funzione `initJobWidgets`)
   cerca nella pagina corrente elementi `.job-start-btn[data-job=X]`,
   `.job-stop-btn[data-job=X]`, `.job-status-badge[data-job=X]`,
@@ -201,7 +204,8 @@ avviati dalla UI.
 Su Docker Desktop/Windows, i driver raw-socket (Npcap) richiesti da nmap
 non funzionano in modo affidabile dentro il namespace di rete di un
 container. Tutti gli script che invocano nmap (`scan_and_store.py`,
-`vuln_scan.py`, `enrich.py`, `host_monitor.py`, `discovery_scan.py`) non
+`vuln_scan.py`, `enrich.py`, `host_monitor.py`, `discovery_scan.py`,
+`custom_scan.py`) non
 chiamano `subprocess.run(["nmap", ...])` direttamente, ma passano da
 `nmap_proxy_client.run_nmap(args, ...)`:
 
@@ -226,6 +230,44 @@ proxy la segnala con `timed_out: true` nella risposta), così il codice
 chiamante esistente (che la intercetta) funziona invariato in entrambe le
 modalità — vedi [DOCKER.md](DOCKER.md) per l'architettura completa e come
 avviare il proxy.
+
+## Scansione nmap personalizzata
+
+`custom_scan.py` (job `customscan`, pagina **Inventario → Scansione nmap**):
+a differenza di `scan_and_store.py` (set fisso di flag, pensato per batch da
+file) accetta target e argomenti nmap **arbitrari**, costruiti dal form
+(`templates/custom_scan.html`, che espone quasi tutte le categorie di
+opzioni nmap via JS in un'unica stringa `args`, più un campo di argomenti
+extra per qualunque flag non coperto esplicitamente) o passati a mano da
+CLI. Pipeline identica a `scan_and_store.py`: `nmap_proxy_client.run_nmap`
+→ `nmap_parser.parse_nmap_xml` → `classify.classify_device` →
+`scanner_db.upsert_host` → `scanner_db.log_scan`. Flag di output/input file
+(`-oX`/`-oN`/`-oG`/`-oA`/`-iL`) digitati per errore negli argomenti extra
+vengono rimossi prima di aggiungere il proprio `-oX` obbligatorio, per
+evitare conflitti con nmap (non accetta due `-oX`).
+
+## Effort di rete globale
+
+`scan_effort.py`: tre profili (`low`="Debole", `normal`="Normale",
+`fast`="Fast", persistiti come stringa in `instance/scan_effort.json`,
+stesso pattern/posto di `monitor_schedule.py`/`report_schedule.py`), ognuno
+con i valori di timing/max-rate/batch-size/porte da usare per una data
+"discrezione" verso firewall/IDS. Impostabile con tre pulsanti in cima ad
+Amministrazione (`POST /api/scan-effort`).
+
+Due modalità di applicazione, diverse per necessità:
+- **live/automatica**: `host_monitor.py` (ciclo di monitoraggio periodico) e
+  il fallback `nmap --script vulners` in `vuln_scan.py` non hanno un form
+  per scegliere l'effort ad ogni esecuzione (girano in background, senza
+  intervento utente) — leggono `scan_effort.current_profile()` direttamente
+  ad ogni ciclo/chiamata
+- **default pre-compilato**: Discovery iniziale, Aggiorna scansione e
+  Scansione nmap hanno già i loro controlli manuali (richiesti in
+  precedenza: timing, max-rate, batch size, porte) — l'effort globale ne
+  imposta solo il **valore iniziale** nel form (lato server, in
+  `admin_panel()`/`nmap_scan_page()`) e nei builder (`build_discovery_args`/
+  `build_rescan_args`, come fallback se il campo arriva vuoto/non valido),
+  senza togliere la possibilità di scegliere altro per la singola esecuzione
 
 ## Monitoraggio: raggiungibilità host con storico
 
@@ -376,11 +418,13 @@ permettono di **pre-popolare** la cache da un file CSV/JSON esterno, con
 | `/reports/generate`, `/reports/send` | GET/POST | Genera/invia un report PDF |
 | `/api/report-schedule`, `/api/notify-status` | GET/POST | Configurazione schedulazione report, stato Telegram/Gmail |
 | `/scans`, `/api/scans` | GET | Log dei batch di scansione nmap |
-| `/admin` | GET | Amministrazione: 6 tab (discovery/rescan/classify/vuln/attack/report) |
-| `/jobs/<name>/start` | POST | Avvia un job in background (`discovery`\|`rescan`\|`classify`\|`vuln`\|`attack`) |
+| `/admin` | GET | Amministrazione: effort globale + 6 tab (discovery/rescan/classify/vuln/attack/report) |
+| `/nmap-scan` | GET | Form di scansione nmap personalizzata (Inventario) |
+| `/jobs/<name>/start` | POST | Avvia un job in background (`discovery`\|`rescan`\|`classify`\|`vuln`\|`attack`\|`customscan`) |
 | `/jobs/<name>/stop` | POST | Interrompe un job in corso (intero albero di processi) |
 | `/api/jobs/<name>/status` | GET | Stato + log di un job |
 | `/api/scan-status` | GET | Progresso dettagliato della scansione (% completamento, ETA) |
+| `/api/scan-effort` | GET/POST | Legge/imposta l'effort di rete globale (Debole/Normale/Fast) |
 
 ## Frontend
 

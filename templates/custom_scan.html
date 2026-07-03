@@ -1,0 +1,425 @@
+{% extends "base.html" %}
+{% block title %}Scansione nmap{% endblock %}
+{% block page_title %}Scansione nmap personalizzata{% endblock %}
+{% block breadcrumb %}<li class="breadcrumb-item active">Scansione nmap</li>{% endblock %}
+
+{% block extra_css %}
+<style>
+  .op-log {
+    max-height: 380px;
+    overflow-y: auto;
+    background: #212529;
+    color: #e9ecef;
+    padding: .75rem;
+    border-radius: .25rem;
+    font-size: .8rem;
+    white-space: pre-wrap;
+  }
+  #customscanCommandPreview {
+    background: #212529;
+    color: #7fffa0;
+    padding: .6rem .75rem;
+    border-radius: .25rem;
+    font-size: .82rem;
+    word-break: break-all;
+  }
+  .cs-section {
+    border: 1px solid #dee2e6;
+    border-radius: .25rem;
+    padding: .75rem;
+    margin-bottom: 1rem;
+  }
+  .cs-section h6 {
+    margin-bottom: .6rem;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<p class="text-muted">
+  Scansione nmap libera su uno o più target scelti a mano, con (quasi) tutte le opzioni nmap
+  disponibili dalla UI. I risultati vengono salvati/aggiornati negli <strong>host</strong>
+  esattamente come le altre scansioni (stessa classificazione automatica del tipo dispositivo).
+</p>
+<p class="small text-muted">
+  <i class="fas fa-circle-info"></i> Timing e max-rate qui sotto sono pre-compilati in base all'
+  <a href="{{ url_for('admin_panel') }}">effort di rete globale</a> attuale (<strong>{{ effort_profile.label }}</strong>),
+  ma restano modificabili liberamente per questa singola scansione.
+</p>
+
+<div class="card card-outline card-primary">
+  <div class="card-header">
+    <h3 class="card-title"><i class="fas fa-satellite-dish"></i> Configurazione scansione</h3>
+    <div class="card-tools">
+      <span class="badge job-status-badge" data-job="customscan"></span>
+    </div>
+  </div>
+  <div class="card-body" id="customscanOptions">
+
+    <div class="cs-section">
+      <h6 class="text-primary"><i class="fas fa-crosshairs"></i> Target</h6>
+      <div class="form-row">
+        <div class="col-md-8">
+          <label class="small text-muted mb-1">Target (obbligatorio)</label>
+          <input type="text" class="form-control form-control-sm" id="customscanTarget"
+                 placeholder="es. 10.1.26.0/24  oppure  10.1.26.5 10.1.26.6  oppure  host.example.com">
+        </div>
+        <div class="col-md-4">
+          <label class="small text-muted mb-1">Escludi (--exclude, opzionale)</label>
+          <input type="text" class="form-control form-control-sm" id="customscanExclude"
+                 placeholder="es. 10.1.26.1,10.1.26.254">
+        </div>
+      </div>
+    </div>
+
+    <div class="cs-section">
+      <h6 class="text-primary"><i class="fas fa-satellite-dish"></i> Host discovery</h6>
+      <div class="form-row">
+        <div class="col-md-4 form-check ml-1">
+          <input type="checkbox" class="form-check-input" id="customscanPn">
+          <label class="form-check-label small" for="customscanPn">Salta il ping, considera i target sempre up (-Pn)</label>
+        </div>
+        <div class="col-md-4 form-check ml-1">
+          <input type="checkbox" class="form-check-input" id="customscanSn">
+          <label class="form-check-label small" for="customscanSn">Solo discovery, non scansionare porte (-sn)</label>
+        </div>
+        <div class="col-md-4 form-check ml-1">
+          <input type="checkbox" class="form-check-input" id="customscanPE" checked>
+          <label class="form-check-label small" for="customscanPE">Ping ICMP echo (-PE)</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="cs-section">
+      <h6 class="text-primary"><i class="fas fa-bullseye"></i> Tecnica di scansione</h6>
+      <div class="form-row">
+        <div class="col-md-5">
+          <select class="form-control form-control-sm" id="customscanTechnique">
+            <option value="">(default nmap: -sS se privilegi disponibili, altrimenti -sT)</option>
+            <option value="-sS">-sS &mdash; TCP SYN scan</option>
+            <option value="-sT">-sT &mdash; TCP connect scan</option>
+            <option value="-sA">-sA &mdash; TCP ACK scan</option>
+            <option value="-sW">-sW &mdash; TCP Window scan</option>
+            <option value="-sM">-sM &mdash; TCP Maimon scan</option>
+            <option value="-sN">-sN &mdash; TCP Null scan</option>
+            <option value="-sF">-sF &mdash; TCP FIN scan</option>
+            <option value="-sX">-sX &mdash; TCP Xmas scan</option>
+            <option value="-sY">-sY &mdash; SCTP INIT scan</option>
+            <option value="-sZ">-sZ &mdash; SCTP COOKIE-ECHO scan</option>
+            <option value="-sO">-sO &mdash; IP protocol scan</option>
+            <option value="-sU">-sU &mdash; UDP scan</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="cs-section">
+      <h6 class="text-primary"><i class="fas fa-ethernet"></i> Porte</h6>
+      <div class="form-row">
+        <div class="col-md-4">
+          <select class="form-control form-control-sm" id="customscanPortMode">
+            <option value="">Default nmap (~1000 porte più comuni)</option>
+            <option value="fast">Scansione rapida (-F, 100 porte più comuni)</option>
+            <option value="custom">Porte specifiche (-p)</option>
+            <option value="top">Le N porte più comuni (--top-ports)</option>
+            <option value="all">Tutte le 65535 porte (-p-)</option>
+          </select>
+        </div>
+        <div class="col-md-4">
+          <input type="text" class="form-control form-control-sm" id="customscanPortValue"
+                 placeholder="es. 22,80,443,8000-8100" style="display:none;">
+        </div>
+      </div>
+    </div>
+
+    <div class="cs-section">
+      <h6 class="text-primary"><i class="fas fa-tag"></i> Rilevamento servizi/versione</h6>
+      <div class="form-row">
+        <div class="col-md-3 form-check ml-1">
+          <input type="checkbox" class="form-check-input" id="customscanSV">
+          <label class="form-check-label small" for="customscanSV">Rileva versione servizi (-sV)</label>
+        </div>
+        <div class="col-md-3">
+          <label class="small text-muted mb-1">Intensità (--version-intensity)</label>
+          <select class="form-control form-control-sm" id="customscanVersionIntensity">
+            <option value="">default (7)</option>
+            {% for i in range(0, 10) %}
+            <option value="{{ i }}">{{ i }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="cs-section">
+      <h6 class="text-primary"><i class="fas fa-scroll"></i> Script (NSE)</h6>
+      <div class="form-row">
+        <div class="col-md-3 form-check ml-1">
+          <input type="checkbox" class="form-check-input" id="customscanSC">
+          <label class="form-check-label small" for="customscanSC">Script default (-sC)</label>
+        </div>
+        <div class="col-md-5">
+          <label class="small text-muted mb-1">--script (elenco/categorie separate da virgola)</label>
+          <input type="text" class="form-control form-control-sm" id="customscanScript" placeholder="es. vuln,default,safe">
+        </div>
+        <div class="col-md-4">
+          <label class="small text-muted mb-1">--script-args</label>
+          <input type="text" class="form-control form-control-sm" id="customscanScriptArgs" placeholder="es. http.useragent=Mozilla">
+        </div>
+      </div>
+    </div>
+
+    <div class="cs-section">
+      <h6 class="text-primary"><i class="fas fa-desktop"></i> Rilevamento OS</h6>
+      <div class="form-row">
+        <div class="col-md-3 form-check ml-1">
+          <input type="checkbox" class="form-check-input" id="customscanO">
+          <label class="form-check-label small" for="customscanO">Rileva sistema operativo (-O)</label>
+        </div>
+        <div class="col-md-4 form-check ml-1">
+          <input type="checkbox" class="form-check-input" id="customscanOsscanGuess">
+          <label class="form-check-label small" for="customscanOsscanGuess">Indovina anche se incerto (--osscan-guess)</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="cs-section">
+      <h6 class="text-primary"><i class="fas fa-gauge-high"></i> Timing e performance</h6>
+      <div class="form-row">
+        <div class="col-md-3">
+          <label class="small text-muted mb-1">Timing template</label>
+          <select class="form-control form-control-sm" id="customscanTiming">
+            <option value="">default (-T3)</option>
+            <option value="0" {{ 'selected' if effort_profile.customscan_timing == '0' else '' }}>T0 - Paranoid</option>
+            <option value="1" {{ 'selected' if effort_profile.customscan_timing == '1' else '' }}>T1 - Sneaky</option>
+            <option value="2" {{ 'selected' if effort_profile.customscan_timing == '2' else '' }}>T2 - Polite</option>
+            <option value="3" {{ 'selected' if effort_profile.customscan_timing == '3' else '' }}>T3 - Normal</option>
+            <option value="4" {{ 'selected' if effort_profile.customscan_timing == '4' else '' }}>T4 - Aggressive</option>
+            <option value="5" {{ 'selected' if effort_profile.customscan_timing == '5' else '' }}>T5 - Insane</option>
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="small text-muted mb-1">--min-rate (pacchetti/sec)</label>
+          <input type="number" min="0" step="10" class="form-control form-control-sm" id="customscanMinRate">
+        </div>
+        <div class="col-md-3">
+          <label class="small text-muted mb-1">--max-rate (pacchetti/sec)</label>
+          <input type="number" min="0" step="10" class="form-control form-control-sm" id="customscanMaxRate" value="{{ effort_profile.customscan_max_rate or '' }}">
+        </div>
+        <div class="col-md-3">
+          <label class="small text-muted mb-1">--host-timeout</label>
+          <input type="text" class="form-control form-control-sm" id="customscanHostTimeout" placeholder="es. 180s">
+        </div>
+      </div>
+      <div class="form-row mt-2">
+        <div class="col-md-3">
+          <label class="small text-muted mb-1">--max-retries</label>
+          <input type="number" min="0" step="1" class="form-control form-control-sm" id="customscanMaxRetries">
+        </div>
+        <div class="col-md-3">
+          <label class="small text-muted mb-1">--max-parallelism</label>
+          <input type="number" min="0" step="1" class="form-control form-control-sm" id="customscanMaxParallelism">
+        </div>
+      </div>
+      <p class="small text-muted mt-2 mb-0">
+        <i class="fas fa-circle-info"></i> Per una scansione discreta: timing basso (T1/T2) e/o
+        <strong>--max-rate</strong> basso (es. 50-150) riducono il carico su firewall/IDS, a costo
+        di tempi più lunghi.
+      </p>
+    </div>
+
+    <div class="cs-section">
+      <h6 class="text-primary"><i class="fas fa-user-ninja"></i> Evasione firewall/IDS</h6>
+      <div class="form-row">
+        <div class="col-md-2 form-check ml-1">
+          <input type="checkbox" class="form-check-input" id="customscanFrag">
+          <label class="form-check-label small" for="customscanFrag">Frammenta pacchetti (-f)</label>
+        </div>
+        <div class="col-md-2">
+          <label class="small text-muted mb-1">--mtu</label>
+          <input type="number" min="8" step="8" class="form-control form-control-sm" id="customscanMtu">
+        </div>
+        <div class="col-md-3">
+          <label class="small text-muted mb-1">Decoy (-D, separati da virgola)</label>
+          <input type="text" class="form-control form-control-sm" id="customscanDecoy" placeholder="es. 10.1.1.5,ME,10.1.1.9">
+        </div>
+        <div class="col-md-2">
+          <label class="small text-muted mb-1">--data-length</label>
+          <input type="number" min="0" step="1" class="form-control form-control-sm" id="customscanDataLength">
+        </div>
+        <div class="col-md-2">
+          <label class="small text-muted mb-1">--ttl</label>
+          <input type="number" min="1" max="255" step="1" class="form-control form-control-sm" id="customscanTtl">
+        </div>
+      </div>
+      <div class="form-row mt-2">
+        <div class="col-md-3">
+          <label class="small text-muted mb-1">--source-port / -g</label>
+          <input type="number" min="1" max="65535" step="1" class="form-control form-control-sm" id="customscanSourcePort">
+        </div>
+        <div class="col-md-3">
+          <label class="small text-muted mb-1">--spoof-mac</label>
+          <input type="text" class="form-control form-control-sm" id="customscanSpoofMac" placeholder="es. 0, Apple, o MAC completo">
+        </div>
+      </div>
+    </div>
+
+    <div class="cs-section">
+      <h6 class="text-primary"><i class="fas fa-sliders"></i> Output e varie</h6>
+      <div class="form-row">
+        <div class="col-md-2 form-check ml-1">
+          <input type="checkbox" class="form-check-input" id="customscanVerbose">
+          <label class="form-check-label small" for="customscanVerbose">Verbose (-v)</label>
+        </div>
+        <div class="col-md-2 form-check ml-1">
+          <input type="checkbox" class="form-check-input" id="customscanReason">
+          <label class="form-check-label small" for="customscanReason">--reason</label>
+        </div>
+        <div class="col-md-2 form-check ml-1">
+          <input type="checkbox" class="form-check-input" id="customscanOpenOnly">
+          <label class="form-check-label small" for="customscanOpenOnly">Solo porte aperte (--open)</label>
+        </div>
+        <div class="col-md-2 form-check ml-1">
+          <input type="checkbox" class="form-check-input" id="customscanIpv6">
+          <label class="form-check-label small" for="customscanIpv6">IPv6 (-6)</label>
+        </div>
+        <div class="col-md-2 form-check ml-1">
+          <input type="checkbox" class="form-check-input" id="customscanTraceroute">
+          <label class="form-check-label small" for="customscanTraceroute">--traceroute</label>
+        </div>
+        <div class="col-md-2 form-check ml-1">
+          <input type="checkbox" class="form-check-input" id="customscanA">
+          <label class="form-check-label small" for="customscanA">Aggressive (-A: -O -sV -sC --traceroute)</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="cs-section">
+      <h6 class="text-primary"><i class="fas fa-keyboard"></i> Argomenti extra</h6>
+      <label class="small text-muted mb-1">
+        Qualunque altra opzione nmap non coperta sopra, aggiunta così com'è (es. <code>--unprivileged</code>).
+        Non usare <code>-oX</code>/<code>-oN</code>/<code>-oG</code>/<code>-oA</code>/<code>-iL</code>: vengono
+        gestiti automaticamente e rimossi se presenti.
+      </label>
+      <input type="text" class="form-control form-control-sm" id="customscanExtraArgs" placeholder="es. --unprivileged">
+    </div>
+
+    <div class="cs-section">
+      <h6 class="text-primary"><i class="fas fa-terminal"></i> Comando risultante</h6>
+      <pre id="customscanCommandPreview" class="mb-0">nmap</pre>
+      <input type="hidden" id="customscanArgsPreview">
+    </div>
+
+    <button class="btn btn-warning job-start-btn mb-2" data-job="customscan">
+      <i class="fas fa-play"></i> Avvia scansione
+    </button>
+    <button class="btn btn-outline-danger job-stop-btn mb-2" data-job="customscan" style="display:none;">
+      <i class="fas fa-stop"></i> Interrompi
+    </button>
+    <p class="small text-muted">
+      I risultati vengono scritti/aggiornati direttamente negli <a href="{{ url_for('hosts_list') }}">host</a>
+      non appena la scansione termina, con lo stesso meccanismo di classificazione automatica delle altre
+      scansioni. Consulta anche il <a href="{{ url_for('scans_list') }}">Log Scansioni</a>.
+    </p>
+    <h6 class="text-muted">Log</h6>
+    <pre class="op-log job-log" data-job="customscan"></pre>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+{% include "_jobs_script.html" %}
+
+function customscanComputeArgs() {
+  const tokens = [];
+  const val = id => document.getElementById(id).value;
+  const checked = id => document.getElementById(id).checked;
+
+  const exclude = val('customscanExclude').trim();
+  if (exclude) tokens.push('--exclude', exclude);
+
+  if (checked('customscanPn')) tokens.push('-Pn');
+  if (checked('customscanSn')) tokens.push('-sn');
+  if (checked('customscanPE')) tokens.push('-PE');
+
+  const technique = val('customscanTechnique');
+  if (technique) tokens.push(technique);
+
+  const portMode = val('customscanPortMode');
+  const portValue = val('customscanPortValue').trim();
+  document.getElementById('customscanPortValue').style.display =
+    (portMode === 'custom' || portMode === 'top') ? '' : 'none';
+  if (portMode === 'fast') tokens.push('-F');
+  else if (portMode === 'all') tokens.push('-p-');
+  else if (portMode === 'custom' && portValue) tokens.push('-p', portValue);
+  else if (portMode === 'top' && portValue) tokens.push('--top-ports', portValue);
+
+  if (checked('customscanSV')) tokens.push('-sV');
+  const versionIntensity = val('customscanVersionIntensity');
+  if (versionIntensity !== '') tokens.push('--version-intensity', versionIntensity);
+
+  if (checked('customscanSC')) tokens.push('-sC');
+  const script = val('customscanScript').trim();
+  if (script) tokens.push('--script', script);
+  const scriptArgs = val('customscanScriptArgs').trim();
+  if (scriptArgs) tokens.push('--script-args', scriptArgs);
+
+  if (checked('customscanO')) tokens.push('-O');
+  if (checked('customscanOsscanGuess')) tokens.push('--osscan-guess');
+
+  const timing = val('customscanTiming');
+  if (timing !== '') tokens.push('-T' + timing);
+  const minRate = val('customscanMinRate').trim();
+  if (minRate) tokens.push('--min-rate', minRate);
+  const maxRate = val('customscanMaxRate').trim();
+  if (maxRate) tokens.push('--max-rate', maxRate);
+  const hostTimeout = val('customscanHostTimeout').trim();
+  if (hostTimeout) tokens.push('--host-timeout', hostTimeout);
+  const maxRetries = val('customscanMaxRetries').trim();
+  if (maxRetries) tokens.push('--max-retries', maxRetries);
+  const maxParallelism = val('customscanMaxParallelism').trim();
+  if (maxParallelism) tokens.push('--max-parallelism', maxParallelism);
+
+  if (checked('customscanFrag')) tokens.push('-f');
+  const mtu = val('customscanMtu').trim();
+  if (mtu) tokens.push('--mtu', mtu);
+  const decoy = val('customscanDecoy').trim();
+  if (decoy) tokens.push('-D', decoy);
+  const dataLength = val('customscanDataLength').trim();
+  if (dataLength) tokens.push('--data-length', dataLength);
+  const ttl = val('customscanTtl').trim();
+  if (ttl) tokens.push('--ttl', ttl);
+  const sourcePort = val('customscanSourcePort').trim();
+  if (sourcePort) tokens.push('-g', sourcePort);
+  const spoofMac = val('customscanSpoofMac').trim();
+  if (spoofMac) tokens.push('--spoof-mac', spoofMac);
+
+  if (checked('customscanVerbose')) tokens.push('-v');
+  if (checked('customscanReason')) tokens.push('--reason');
+  if (checked('customscanOpenOnly')) tokens.push('--open');
+  if (checked('customscanIpv6')) tokens.push('-6');
+  if (checked('customscanTraceroute')) tokens.push('--traceroute');
+  if (checked('customscanA')) tokens.push('-A');
+
+  const extra = val('customscanExtraArgs').trim();
+  const fullArgs = extra ? tokens.concat([extra]).join(' ') : tokens.join(' ');
+
+  document.getElementById('customscanArgsPreview').value = fullArgs;
+  const target = val('customscanTarget').trim() || '<target>';
+  document.getElementById('customscanCommandPreview').textContent =
+    ('nmap ' + fullArgs + ' ' + target).replace(/\s+/g, ' ').trim();
+}
+
+document.getElementById('customscanOptions').addEventListener('input', customscanComputeArgs);
+document.getElementById('customscanOptions').addEventListener('change', customscanComputeArgs);
+customscanComputeArgs();
+
+initJobWidgets({
+  customscan: { forceCheckbox: null, fields: [
+    { id: 'customscanTarget', param: 'target' },
+    { id: 'customscanArgsPreview', param: 'args' },
+  ] },
+});
+</script>
+{% endblock %}

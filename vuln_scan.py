@@ -30,6 +30,7 @@ from xml.etree import ElementTree as ET
 import cve_lookup
 import nmap_proxy_client
 import nvd_client
+import scan_effort
 import scanner_db
 from job_lock import JobLock
 
@@ -64,10 +65,14 @@ def build_cpe_groups(conn):
 
 def fetch_vulners_output(ip, port, timeout=90):
     """Esegue nmap --script vulners su un singolo host:porta e ritorna
-    l'output testuale dello script 'vulners' (o None se assente/errore)."""
+    l'output testuale dello script 'vulners' (o None se assente/errore).
+    Timing (-T) seguito dall'effort di rete globale (scan_effort.py): come
+    per il monitoraggio, questa chiamata gira senza un form dedicato dove
+    scegliere l'effort per la singola esecuzione."""
+    timing = scan_effort.current_profile()["vuln_timing"]
     try:
         result = nmap_proxy_client.run_nmap(
-            ["-Pn", "-p", str(port), "--script", "vulners", "-oX", "-", ip],
+            ["-Pn", f"-T{timing}", "-p", str(port), "--script", "vulners", "-oX", "-", ip],
             capture_output=True, text=True, timeout=timeout,
         )
     except subprocess.TimeoutExpired:

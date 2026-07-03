@@ -42,8 +42,39 @@ Apri `http://127.0.0.1:5200`. Dalla pagina **Amministrazione** puoi:
 6. **Report** — genera un PDF (riepilogo + elenco host), lo invia subito o
    pianifica un invio periodico via Telegram/Gmail
 
+In cima alla pagina **Amministrazione** c'è anche l'**effort di rete
+globale** (Debole/Normale/Fast, vedi sotto): orchestra quanto sono discrete
+tutte le attività di scansione, per non affaticare firewall/IDS.
+
+Da **Inventario → Scansione nmap** si può inoltre lanciare una scansione
+nmap libera su target scelti a mano, con (quasi) tutte le opzioni nmap
+disponibili in un form (tecnica di scansione, porte, versione/OS, script
+NSE, timing, evasione firewall) più un campo di argomenti extra per
+qualunque flag non esposto esplicitamente: i risultati confluiscono negli
+host con lo stesso meccanismo di classificazione automatica delle altre
+scansioni.
+
 Il **Monitoraggio** (raggiungibilità host, storico) parte da solo in
 background non appena l'app è in esecuzione — non richiede un avvio manuale.
+
+## Effort di rete globale
+
+Una leva unica (**Debole** / **Normale** / **Fast**), impostabile in cima ad
+Amministrazione, che orchestra quanto sono discrete tutte le attività di
+scansione verso la rete:
+
+- il **monitoraggio periodico** (`host_monitor.py`) e il **fallback
+  vulnerabilità** (`nmap --script vulners` in `vuln_scan.py`) la seguono
+  **automaticamente e dal vivo** ad ogni esecuzione (non hanno un form
+  dedicato per scegliere l'effort volta per volta);
+- **Discovery iniziale**, **Aggiorna scansione** e **Scansione nmap**
+  (i job con controlli manuali già esistenti: timing, max-rate, batch
+  size/thread paralleli, porte) la usano come **valore pre-compilato** nei
+  rispettivi form quando li apri, restando comunque liberamente modificabile
+  per la singola esecuzione.
+
+Persistita in `instance/scan_effort.json` (modulo `scan_effort.py`), non
+versionata.
 
 ## Struttura del progetto
 
@@ -57,6 +88,8 @@ scan_and_store.py           Orchestratore scansione nmap -sV -O -sC a batch
 run_rescan.py               Concatena extract_up_ips.py + scan_and_store.py --resume
 discovery_scan.py           Ping-sweep 10.0.0.0/8 a 256 subnet (equivalente Python, usato in Docker)
 scripts/nmap-discovery-10net.ps1  Ping-sweep 10.0.0.0/8 (script PowerShell, uso nativo Windows)
+custom_scan.py               Scansione nmap libera (target + argomenti a scelta), risultati negli host
+scan_effort.py               Effort di rete globale (Debole/Normale/Fast): default per tutti i job di scansione
 
 nmap_proxy_client.py        Client per instradare le chiamate nmap verso il proxy (modalità container)
 nmap_proxy_server.py        Proxy HTTP per nmap, gira nativamente sull'host (nmap fuori da Docker)

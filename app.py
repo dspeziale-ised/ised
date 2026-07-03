@@ -22,6 +22,7 @@ import notify_gmail
 import notify_telegram
 import report_generator
 import report_schedule
+import scan_effort
 import scanner_db
 
 BASE_DIR = Path(__file__).parent
@@ -278,6 +279,12 @@ JOBS = {
         "log_file": LOGS_DIR / "attack_log.txt",
         "label": "Mappatura MITRE ATT&CK",
     },
+    "customscan": {
+        "cmd": [sys.executable, str(BASE_DIR / "custom_scan.py")],
+        "lock_file": BASE_DIR / "customscan.lock",
+        "log_file": LOGS_DIR / "customscan_log.txt",
+        "label": "Scansione nmap personalizzata",
+    },
 }
 _job_processes = {}
 
@@ -486,7 +493,20 @@ def admin_panel():
         jobs_running={name: is_job_running(name) for name in JOBS},
         notify_status=notify_status_dict(),
         report_schedule_config=report_schedule.load(),
+        effort_level=scan_effort.load_level(),
+        effort_profile=scan_effort.current_profile(),
+        effort_profiles=scan_effort.all_profiles(),
     )
+
+
+@app.route("/api/scan-effort", methods=["GET", "POST"])
+def api_scan_effort():
+    if request.method == "POST":
+        level = (request.form.get("level") or "").strip()
+        if level not in scan_effort.LEVELS:
+            return jsonify({"ok": False, "reason": "Livello di effort sconosciuto."}), 400
+        scan_effort.save_level(level)
+    return jsonify({"ok": True, "level": scan_effort.load_level(), "profile": scan_effort.current_profile()})
 
 
 JOB_FORCE_FLAG = {"attack": "--update-matrix"}
@@ -511,12 +531,15 @@ def build_discovery_args(values):
     (pacchetti/secondo, es. 50-150) — il timing template (T3-T5) e il
     numero di thread/subnet in parallelo ('batch_size') restano comunque
     configurabili ma T0-T2 non sono ammessi (impraticabili su un /16)."""
+    profile = scan_effort.current_profile()
     output_dir = (values.get("output_dir") or "").strip() or str(DATA_DIR)
     batch_size = values.get("batch_size", type=int)
     timing = (values.get("timing") or "").strip()
     if timing not in DISCOVERY_TIMING_CHOICES:
-        timing = None
+        timing = profile["discovery_timing"]
     max_rate = values.get("max_rate", type=int)
+    if max_rate is None:
+        max_rate = profile["discovery_max_rate"]
 
     if USE_PYTHON_DISCOVERY:
         args = ["--output-dir", output_dir]
@@ -544,21 +567,59 @@ def build_discovery_args(values):
 
 def build_rescan_args(values):
     """Costruisce gli argomenti CLI per run_rescan.py dai campi del form:
-    solo 'timing' (-T1..-T5, default 4 se non indicato) per controllare
-    l'aggressività della scansione OS/servizi, stesso motivo di discovery."""
+    'timing' (-T1..-T5) e 'top_ports' (numero di porte scansionate per
+    host, meno porte = meno traffico) per controllare l'aggressività della
+    scansione OS/servizi, stesso motivo di discovery. Entrambi seguono
+    l'effort di rete globale se non esplicitamente indicati nel form."""
+    profile = scan_effort.current_profile()
     timing = (values.get("timing") or "").strip()
     if timing not in RESCAN_TIMING_CHOICES:
-        return []
-    return ["--timing", timing]
+        timing = profile["rescan_timing"]
+    top_ports = values.get("top_ports", type=int) or profile["rescan_top_ports"]
+    return ["--timing", timing, "--top-ports", str(top_ports)]
 
 
-JOB_ARGS_BUILDERS = {"discovery": build_discovery_args, "rescan": build_rescan_args}
+def build_customscan_args(values):
+    """Costruisce gli argomenti CLI per custom_scan.py: 'target' (IP/range/
+    CIDR/hostname, obbligatorio, validato da validate_customscan) e 'args'
+    (stringa di flag nmap costruita lato client dal form 'Scansione nmap' -
+    vedi templates/custom_scan.html - più eventuali argomenti extra digitati
+    a mano, per coprire opzioni non esposte esplicitamente in UI)."""
+    target = (values.get("target") or "").strip()
+    extra_args = (values.get("args") or "").strip()
+    args = ["--target", target]
+    if extra_args:
+        args += ["--args", extra_args]
+    return args
+
+
+def validate_customscan(values):
+    if not (values.get("target") or "").strip():
+        return "Specificare almeno un target (IP, range, CIDR o hostname)."
+    return None
+
+
+JOB_ARGS_BUILDERS = {
+    "discovery": build_discovery_args,
+    "rescan": build_rescan_args,
+    "customscan": build_customscan_args,
+}
+# Validazioni pre-avvio per job che richiedono campi obbligatori dal form
+# (a differenza degli altri job, avviabili anche senza parametri): se manca
+# qualcosa qui si evita di far partire un processo condannato a fallire
+# subito, restituendo invece un errore chiaro al form.
+JOB_VALIDATORS = {"customscan": validate_customscan}
 
 
 @app.route("/jobs/<name>/start", methods=["POST"])
 def job_start(name):
     if name not in JOBS:
         return jsonify({"started": False, "reason": "Job sconosciuto."}), 404
+    validator = JOB_VALIDATORS.get(name)
+    if validator:
+        error = validator(request.values)
+        if error:
+            return jsonify({"started": False, "reason": error})
     builder = JOB_ARGS_BUILDERS.get(name)
     if builder:
         extra_args = builder(request.values)
@@ -1180,6 +1241,15 @@ def api_network_map():
         return node
 
     return jsonify(finalize(root))
+
+
+@app.route("/nmap-scan")
+def nmap_scan_page():
+    return render_template(
+        "custom_scan.html",
+        job_running=is_job_running("customscan"),
+        effort_profile=scan_effort.current_profile(),
+    )
 
 
 @app.route("/attack-matrix")
