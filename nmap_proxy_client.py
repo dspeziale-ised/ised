@@ -26,12 +26,41 @@ eccezione) funziona invariato in entrambe le modalità.
 
 import base64
 import os
+import re
 import subprocess
 from pathlib import Path
 
 import requests
 
 import secrets_store
+
+# nmap stampa questa riga riepilogativa su stdout solo con -v (mai nell'XML
+# di -oX), es. "Raw packets sent: 1234 (54.312KB) | Rcvd: 1230 (49.200KB)".
+# Le unità osservate sono B/KB/MB/GB/TB, convertite in byte assumendo 1024
+# come base (convenzione usata da nmap) — un'approssimazione sufficiente per
+# un indicatore di traffico in dashboard, non per una contabilità esatta.
+_TRAFFIC_STATS_RE = re.compile(
+    r"Raw packets sent:\s*(\d+)\s*\(([\d.]+)([KMGT]?B)\)\s*\|\s*Rcvd:\s*(\d+)\s*\(([\d.]+)([KMGT]?B)\)"
+)
+_UNIT_MULTIPLIER = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
+
+
+def parse_traffic_stats(stdout_text):
+    """Estrae {'packets_sent', 'bytes_sent', 'packets_rcvd', 'bytes_rcvd'}
+    dall'output testuale di nmap (richiede -v), o None se la riga non è
+    presente (es. output assente/troncato per un timeout, o -v non passato)."""
+    if not stdout_text:
+        return None
+    match = _TRAFFIC_STATS_RE.search(stdout_text)
+    if not match:
+        return None
+    packets_sent, sent_value, sent_unit, packets_rcvd, rcvd_value, rcvd_unit = match.groups()
+    return {
+        "packets_sent": int(packets_sent),
+        "bytes_sent": round(float(sent_value) * _UNIT_MULTIPLIER.get(sent_unit, 1)),
+        "packets_rcvd": int(packets_rcvd),
+        "bytes_rcvd": round(float(rcvd_value) * _UNIT_MULTIPLIER.get(rcvd_unit, 1)),
+    }
 
 PROXY_URL = (os.environ.get("NMAP_PROXY_URL") or "").rstrip("/") or None
 

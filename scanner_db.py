@@ -306,6 +306,24 @@ CREATE TABLE IF NOT EXISTS nmap_scan_templates (
     saved_at    TEXT
 );
 
+-- Traffico (pacchetti/byte inviati e ricevuti) generato dalle scansioni
+-- nmap dell'app, una riga per invocazione nmap completata con successo
+-- (parsing di "Raw packets sent: N (xKB) | Rcvd: M (yKB)", stampato da nmap
+-- solo con -v). 'source' indica lo script che l'ha generato (scan_pipeline/
+-- discovery/monitor), utile per un'eventuale ripartizione futura. Righe
+-- individuali (non un unico contatore cumulativo) per poter mostrare un
+-- grafico dell'andamento nel tempo, non solo un totale.
+CREATE TABLE IF NOT EXISTS traffic_log (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    recorded_at  TEXT NOT NULL,
+    source       TEXT,
+    packets_sent INTEGER DEFAULT 0,
+    bytes_sent   INTEGER DEFAULT 0,
+    packets_rcvd INTEGER DEFAULT 0,
+    bytes_rcvd   INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_traffic_log_recorded_at ON traffic_log(recorded_at);
+
 CREATE INDEX IF NOT EXISTS idx_os_matches_host ON os_matches(host_id);
 CREATE INDEX IF NOT EXISTS idx_services_host ON services(host_id);
 CREATE INDEX IF NOT EXISTS idx_hosts_device_type ON hosts(device_type);
@@ -878,3 +896,61 @@ def delete_scan_template(conn, name):
     cur = conn.execute("DELETE FROM nmap_scan_templates WHERE name = ?", (name,))
     conn.commit()
     return (cur.rowcount or 0) > 0
+
+
+def log_traffic(conn, source, packets_sent, bytes_sent, packets_rcvd, bytes_rcvd):
+    """Registra il traffico (pacchetti/byte) di UNA invocazione nmap
+    completata. Una riga per invocazione (non un contatore cumulativo unico)
+    per poter ricostruire un andamento nel tempo, vedi traffic_summary()."""
+    conn.execute(
+        """INSERT INTO traffic_log (recorded_at, source, packets_sent, bytes_sent, packets_rcvd, bytes_rcvd)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (_now(), source, packets_sent, bytes_sent, packets_rcvd, bytes_rcvd),
+    )
+    conn.commit()
+
+
+def traffic_summary(conn, since_minutes=60, bucket_minutes=2):
+    """Ritorna {'total': {...}, 'series': [{'t', 'packets_sent', 'bytes_sent',
+    'packets_rcvd', 'bytes_rcvd'}, ...]}: 'total' è il cumulativo su tutto lo
+    storico (per il badge riepilogativo), 'series' raggruppa gli ultimi
+    since_minutes minuti in bucket da bucket_minutes minuti (per il grafico
+    dell'andamento recente, un punto = somma del bucket). Il binning è fatto
+    in Python (non con funzioni SQL di troncamento data, diverse fra SQLite
+    e Postgres) sulle righe già filtrate per data, coerente con come il
+    resto del progetto evita differenze di dialetto sulle date."""
+    total_row = conn.execute(
+        "SELECT COALESCE(SUM(packets_sent),0) ps, COALESCE(SUM(bytes_sent),0) bs, "
+        "COALESCE(SUM(packets_rcvd),0) pr, COALESCE(SUM(bytes_rcvd),0) br FROM traffic_log"
+    ).fetchone()
+    total = {
+        "packets_sent": total_row["ps"], "bytes_sent": total_row["bs"],
+        "packets_rcvd": total_row["pr"], "bytes_rcvd": total_row["br"],
+    }
+
+    since = (datetime.now() - timedelta(minutes=since_minutes)).isoformat(timespec="seconds")
+    rows = conn.execute(
+        "SELECT recorded_at, packets_sent, bytes_sent, packets_rcvd, bytes_rcvd "
+        "FROM traffic_log WHERE recorded_at >= ? ORDER BY recorded_at",
+        (since,),
+    ).fetchall()
+
+    buckets = {}
+    for r in rows:
+        try:
+            ts = datetime.fromisoformat(r["recorded_at"])
+        except ValueError:
+            continue
+        floored_minute = ts.minute - (ts.minute % bucket_minutes)
+        bucket_ts = ts.replace(minute=floored_minute, second=0, microsecond=0)
+        key = bucket_ts.isoformat(timespec="minutes")
+        b = buckets.setdefault(
+            key, {"t": key, "packets_sent": 0, "bytes_sent": 0, "packets_rcvd": 0, "bytes_rcvd": 0}
+        )
+        b["packets_sent"] += r["packets_sent"] or 0
+        b["bytes_sent"] += r["bytes_sent"] or 0
+        b["packets_rcvd"] += r["packets_rcvd"] or 0
+        b["bytes_rcvd"] += r["bytes_rcvd"] or 0
+
+    series = [buckets[k] for k in sorted(buckets)]
+    return {"total": total, "series": series, "bucket_minutes": bucket_minutes}
