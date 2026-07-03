@@ -8,6 +8,7 @@
 .gmail_address
 .gmail_app_password
 .gmail_to
+.nmap_proxy_token
 *.env
 
 # Dati di rete interni / risultati scansione: contengono IP, hostname,

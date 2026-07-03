@@ -4,7 +4,6 @@ import datetime
 import hashlib
 import math
 import os
-import sqlite3
 import subprocess
 import sys
 import threading
@@ -13,7 +12,10 @@ from pathlib import Path
 
 from flask import Flask, Response, abort, g, jsonify, redirect, render_template, request, url_for
 
+import classify
 import cve_lookup
+import host_monitor
+import monitor_schedule
 import notify_gmail
 import notify_telegram
 import report_generator
@@ -21,17 +23,29 @@ import report_schedule
 import scanner_db
 
 BASE_DIR = Path(__file__).parent
-DB_PATH = Path(os.environ.get("INVENTORY_DB", BASE_DIR / "instance" / "inventory.db"))
 SCAN_INPUT_FILE = Path(os.environ.get("SCAN_INPUT", BASE_DIR / "up_ips.txt"))
 SCRIPTS_DIR = BASE_DIR / "scripts"
 DATA_DIR = BASE_DIR / "data"
 
+# DATABASE_URL (postgresql://...) ha priorità: è così che il container Docker
+# punta al servizio Postgres. Senza, si torna al comportamento nativo di
+# sempre: un file SQLite (INVENTORY_DB o instance/inventory.db di default).
+_DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+DB_IS_POSTGRES = bool(_DATABASE_URL) and scanner_db.is_postgres_url(_DATABASE_URL)
+DB_PATH = _DATABASE_URL if DB_IS_POSTGRES else Path(
+    os.environ.get("INVENTORY_DB", BASE_DIR / "instance" / "inventory.db")
+)
+LIKE_OP = "ILIKE" if DB_IS_POSTGRES else "LIKE"
+
 app = Flask(__name__)
 
-if DB_PATH.exists():
+if DB_IS_POSTGRES or DB_PATH.exists():
+    # init_db crea le tabelle se mancano (idempotente, CREATE TABLE IF NOT
+    # EXISTS) — necessario soprattutto per Postgres: a differenza di un file
+    # SQLite, un DB Postgres appena creato non ha nessuno schema ad attendere
+    # che uno script CLI lo popoli, e l'app web è spesso la prima a connettersi.
     _startup_conn = scanner_db.connect(str(DB_PATH))
-    scanner_db.ensure_ai_columns(_startup_conn)
-    scanner_db.ensure_service_columns(_startup_conn)
+    scanner_db.init_db(_startup_conn)
     scanner_db.normalize_device_types(_startup_conn)
     _startup_conn.close()
 
@@ -89,9 +103,7 @@ def color_for_device_type(name):
 
 def get_db():
     if "db" not in g:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        g.db = conn
+        g.db = scanner_db.connect(str(DB_PATH))
     return g.db
 
 
@@ -130,18 +142,20 @@ def is_scan_and_store_running():
 
 
 def is_discovery_running():
-    """True solo se lo script nmap-discovery-10net.ps1 di questo progetto è
-    attivo (stesso principio di is_scan_and_store_running: query sulla
-    command line dei processi powershell, non un generico nmap.exe/
-    powershell.exe che darebbe falsi positivi con processi indipendenti)."""
+    """True solo se lo script di discovery di questo progetto è attivo
+    (stesso principio di is_scan_and_store_running: query sulla command
+    line dei processi, non un generico nmap.exe/powershell.exe che darebbe
+    falsi positivi con processi indipendenti). Copre sia lo script
+    PowerShell nativo sia l'equivalente Python (discovery_scan.py) usato in
+    modalità container."""
     try:
         out = subprocess.run(
             ["powershell", "-NoProfile", "-Command",
-             "Get-CimInstance Win32_Process -Filter \"Name LIKE '%powershell%'\" "
+             "Get-CimInstance Win32_Process "
              "| Select-Object -ExpandProperty CommandLine"],
             capture_output=True, text=True, timeout=8,
         )
-        return "nmap-discovery-10net.ps1" in out.stdout
+        return "nmap-discovery-10net.ps1" in out.stdout or "discovery_scan.py" in out.stdout
     except Exception:
         return False
 
@@ -157,16 +171,25 @@ def is_pid_alive(pid):
         return False
 
 
+# In modalità container (NMAP_PROXY_URL impostata) non c'è PowerShell/nmap
+# nativo nel container: si usa l'equivalente Python (discovery_scan.py, che
+# passa da nmap_proxy_client) invece dello script PowerShell originale, che
+# resta il default per l'uso nativo su Windows (più maturo, in uso da tempo).
+USE_PYTHON_DISCOVERY = bool(os.environ.get("NMAP_PROXY_URL"))
+
 # Job in background avviabili dalla UI (niente più comandi a mano da terminale):
-# - discovery: ping-sweep -sn su tutta 10.0.0.0/8 (script PowerShell) -> data/*.xml
+# - discovery: ping-sweep -sn su tutta 10.0.0.0/8 -> data/*.xml
 # - rescan: estrae gli IP up da data/*.xml e scansiona quelli nuovi (nmap)
 # - classify: classifica il tipo di dispositivo via LLM (Groq/Gemini/Ollama)
 # - vuln: cerca CVE per le CPE rilevate (nmap --script vulners, con cache)
 # - attack: mappa servizi/vulnerabilità sulle tecniche MITRE ATT&CK
 JOBS = {
     "discovery": {
-        "cmd": ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                str(SCRIPTS_DIR / "nmap-discovery-10net.ps1")],
+        "cmd": (
+            [sys.executable, str(BASE_DIR / "discovery_scan.py")] if USE_PYTHON_DISCOVERY else
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+             str(SCRIPTS_DIR / "nmap-discovery-10net.ps1")]
+        ),
         "lock_file": BASE_DIR / "discovery.lock",
         "log_file": BASE_DIR / "discovery_log.txt",
         "label": "Discovery iniziale",
@@ -320,9 +343,12 @@ def get_scan_progress():
     hosts_recorded = db.execute("SELECT COUNT(*) c FROM hosts").fetchone()["c"]
     batches_done = db.execute("SELECT COUNT(*) c FROM scans").fetchone()["c"]
     last_batch = db.execute("SELECT * FROM scans ORDER BY id DESC LIMIT 1").fetchone()
+    duration_expr = (
+        "EXTRACT(EPOCH FROM (finished_at::timestamptz - started_at::timestamptz))" if DB_IS_POSTGRES
+        else "(julianday(finished_at) - julianday(started_at)) * 86400.0"
+    )
     avg_row = db.execute(
-        "SELECT AVG((julianday(finished_at) - julianday(started_at)) * 86400.0) avg_s, "
-        "AVG(target_count) avg_batch FROM scans"
+        f"SELECT AVG({duration_expr}) avg_s, AVG(target_count) avg_batch FROM scans"
     ).fetchone()
     avg_duration = avg_row["avg_s"]
     avg_batch_size = avg_row["avg_batch"] or 32
@@ -396,15 +422,24 @@ JOB_FORCE_FLAG = {"attack": "--update-matrix"}
 
 
 def build_discovery_args(values):
-    """Costruisce gli argomenti CLI per nmap-discovery-10net.ps1 dai campi del
-    form (BatchSize/OutputDir/NmapPath). Di default scrive gli XML direttamente
-    in data/, cosi il job 'rescan' successivo li trova senza passaggi manuali."""
-    args = []
+    """Costruisce gli argomenti CLI per il job discovery dai campi del form
+    (BatchSize/OutputDir/NmapPath). Di default scrive gli XML direttamente in
+    data/, cosi il job 'rescan' successivo li trova senza passaggi manuali.
+    Il formato dei flag dipende da quale script è attivo (vedi
+    USE_PYTHON_DISCOVERY): PowerShell (nativo) o discovery_scan.py (container)."""
+    output_dir = (values.get("output_dir") or "").strip() or str(DATA_DIR)
     batch_size = values.get("batch_size", type=int)
+
+    if USE_PYTHON_DISCOVERY:
+        args = ["--output-dir", output_dir]
+        if batch_size and batch_size > 0:
+            args += ["--batch-size", str(batch_size)]
+        return args
+
+    args = []
     if batch_size and batch_size > 0:
         args += ["-BatchSize", str(batch_size)]
-    output_dir = (values.get("output_dir") or "").strip()
-    args += ["-OutputDir", output_dir or str(DATA_DIR)]
+    args += ["-OutputDir", output_dir]
     nmap_path = (values.get("nmap_path") or "").strip()
     if nmap_path:
         args += ["-NmapPath", nmap_path]
@@ -569,8 +604,8 @@ def api_hosts():
     params = list(fixed_params)
     if search_value:
         where.append(
-            "(h.ip LIKE ? OR h.hostname LIKE ? OR COALESCE(h.device_type,'unknown') LIKE ? "
-            "OR h.os_family LIKE ? OR h.os_name LIKE ? OR h.mac_address LIKE ?)"
+            f"(h.ip {LIKE_OP} ? OR h.hostname {LIKE_OP} ? OR COALESCE(h.device_type,'unknown') {LIKE_OP} ? "
+            f"OR h.os_family {LIKE_OP} ? OR h.os_name {LIKE_OP} ? OR h.mac_address {LIKE_OP} ?)"
         )
         like = f"%{search_value}%"
         params.extend([like] * 6)
@@ -635,10 +670,12 @@ def host_detail(ip):
         (host["id"],),
     ).fetchall()
     attack_techniques = scanner_db.get_host_attack_techniques(db, host["id"])
+    ttl_baseline, ttl_hops = classify.guess_ttl_baseline(host["ttl"])
     return render_template(
         "host_detail.html", host=host, os_matches=os_matches, services=services,
         device_type_options=sorted(DEVICE_COLOR.keys()), roles=roles,
         vulnerabilities=vulnerabilities, attack_techniques=attack_techniques,
+        ttl_baseline=ttl_baseline, ttl_hops=ttl_hops,
     )
 
 
@@ -689,7 +726,7 @@ def api_services():
     where_sql = ""
     params = []
     if search_value:
-        where_sql = "WHERE (CAST(port AS TEXT) LIKE ? OR protocol LIKE ? OR service_name LIKE ?)"
+        where_sql = f"WHERE (CAST(port AS TEXT) {LIKE_OP} ? OR protocol {LIKE_OP} ? OR service_name {LIKE_OP} ?)"
         like = f"%{search_value}%"
         params = [like, like, like]
 
@@ -768,8 +805,8 @@ def api_service_hosts():
     params = list(fixed_params)
     if search_value:
         where.append(
-            "(h.ip LIKE ? OR h.hostname LIKE ? OR COALESCE(h.device_type,'unknown') LIKE ? "
-            "OR h.os_name LIKE ? OR s.product LIKE ? OR s.version LIKE ?)"
+            f"(h.ip {LIKE_OP} ? OR h.hostname {LIKE_OP} ? OR COALESCE(h.device_type,'unknown') {LIKE_OP} ? "
+            f"OR h.os_name {LIKE_OP} ? OR s.product {LIKE_OP} ? OR s.version {LIKE_OP} ?)"
         )
         like = f"%{search_value}%"
         params.extend([like] * 6)
@@ -836,7 +873,7 @@ def api_scans():
     where_sql = ""
     params = []
     if search_value:
-        where_sql = "WHERE (status LIKE ? OR xml_path LIKE ? OR command LIKE ?)"
+        where_sql = f"WHERE (status {LIKE_OP} ? OR xml_path {LIKE_OP} ? OR command {LIKE_OP} ?)"
         like = f"%{search_value}%"
         params = [like, like, like]
 
@@ -944,7 +981,7 @@ def api_vulnerabilities():
     params = list(fixed_params)
     if search_value:
         where.append(
-            "(hv.cve_id LIKE ? OR h.ip LIKE ? OR hv.cpe LIKE ? OR COALESCE(h.device_type,'') LIKE ?)"
+            f"(hv.cve_id {LIKE_OP} ? OR h.ip {LIKE_OP} ? OR hv.cpe {LIKE_OP} ? OR COALESCE(h.device_type,'') {LIKE_OP} ?)"
         )
         like = f"%{search_value}%"
         params.extend([like] * 4)
@@ -1073,6 +1110,158 @@ def api_attack_technique_hosts(technique_id):
     })
 
 
+@app.route("/monitoring")
+def monitoring():
+    db = get_db()
+    scanner_db.ensure_monitor_tables(db)
+    return render_template(
+        "monitoring.html",
+        summary=scanner_db.monitor_summary(db),
+        monitor_config=monitor_schedule.load(),
+    )
+
+
+MONITORING_ORDER_MAP = {0: "h.ip", 1: "device_type", 2: "status", 3: "checked_at"}
+
+
+@app.route("/api/monitoring")
+def api_monitoring():
+    db = get_db()
+    draw, start, length, search_value, orders = dt_params()
+    status_filter = request.values.get("status", "").strip()
+
+    records_total = db.execute("SELECT COUNT(*) c FROM hosts").fetchone()["c"]
+
+    where = []
+    params = []
+    if search_value:
+        where.append(f"(h.ip {LIKE_OP} ? OR COALESCE(h.device_type,'unknown') {LIKE_OP} ?)")
+        like = f"%{search_value}%"
+        params.extend([like, like])
+    if status_filter == "unknown":
+        where.append("latest_status.status IS NULL")
+    elif status_filter:
+        where.append("latest_status.status = ?")
+        params.append(status_filter)
+
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    base_sql = f"""
+        FROM hosts h
+        LEFT JOIN (
+            SELECT hsc.host_id, hsc.status, hsc.checked_at
+            FROM host_status_checks hsc
+            JOIN (SELECT host_id, MAX(id) max_id FROM host_status_checks GROUP BY host_id) latest
+              ON latest.host_id = hsc.host_id AND latest.max_id = hsc.id
+        ) latest_status ON latest_status.host_id = h.id
+        {where_sql}
+    """
+    records_filtered = db.execute(f"SELECT COUNT(*) c {base_sql}", params).fetchone()["c"]
+
+    order_sql = dt_order_sql(orders, MONITORING_ORDER_MAP, "h.ip ASC")
+    query = f"""
+        SELECT h.id, h.ip, COALESCE(h.device_type,'unknown') device_type,
+               latest_status.status, latest_status.checked_at
+        {base_sql}
+        ORDER BY {order_sql}
+        LIMIT ? OFFSET ?
+    """
+    rows = db.execute(query, params + [length, start]).fetchall()
+
+    data = []
+    for r in rows:
+        uptime = scanner_db.host_uptime_percent(db, r["id"], since_hours=24) if r["status"] else None
+        data.append({
+            "ip": r["ip"],
+            "ip_url": url_for("host_detail", ip=r["ip"]),
+            "device_type": r["device_type"],
+            "device_badge": badge_class(r["device_type"]),
+            "status": r["status"] or "unknown",
+            "checked_at": r["checked_at"] or "",
+            "uptime_24h": uptime,
+        })
+
+    return jsonify({
+        "draw": draw,
+        "recordsTotal": records_total,
+        "recordsFiltered": records_filtered,
+        "data": data,
+    })
+
+
+@app.route("/api/monitoring/host/<ip>/history")
+def api_monitoring_host_history(ip):
+    db = get_db()
+    host = db.execute("SELECT id FROM hosts WHERE ip = ?", (ip,)).fetchone()
+    if host is None:
+        abort(404)
+    history = scanner_db.get_host_status_history(db, host["id"], limit=200)
+    return jsonify({
+        "history": history,
+        "uptime_24h": scanner_db.host_uptime_percent(db, host["id"], since_hours=24),
+        "uptime_7d": scanner_db.host_uptime_percent(db, host["id"], since_hours=24 * 7),
+    })
+
+
+@app.route("/api/monitoring/hourly")
+def api_monitoring_hourly():
+    db = get_db()
+    date_str = request.args.get("date") or datetime.date.today().isoformat()
+    try:
+        datetime.datetime.fromisoformat(date_str)
+    except ValueError:
+        return jsonify({"error": "Data non valida (attesa YYYY-MM-DD)."}), 400
+
+    hourly_by_host = scanner_db.hosts_hourly_status(db, date_str)
+    hosts = db.execute(
+        "SELECT id, ip, COALESCE(device_type,'unknown') device_type FROM hosts ORDER BY ip"
+    ).fetchall()
+
+    def ip_key(ip):
+        try:
+            return tuple(int(p) for p in ip.split("."))
+        except ValueError:
+            return (999, 999, 999, 999)
+
+    data = [
+        {
+            "ip": h["ip"],
+            "ip_url": url_for("host_detail", ip=h["ip"]),
+            "device_type": h["device_type"],
+            "device_badge": badge_class(h["device_type"]),
+            "hours": hourly_by_host.get(h["id"], [None] * 24),
+        }
+        for h in sorted(hosts, key=lambda h: ip_key(h["ip"]))
+    ]
+    return jsonify({"date": date_str, "hosts": data})
+
+
+@app.route("/monitoring/run-now", methods=["POST"])
+def monitoring_run_now():
+    config = monitor_schedule.load()
+    db = get_db()
+    summary = host_monitor.run_monitor_cycle(
+        db, batch_size=config.get("batch_size") or 60, heartbeat_minutes=config.get("heartbeat_minutes") or 60,
+    )
+    monitor_schedule.mark_run(datetime.datetime.now(), summary)
+    return jsonify({"ok": True, "summary": summary})
+
+
+@app.route("/api/monitor-schedule", methods=["GET", "POST"])
+def api_monitor_schedule():
+    if request.method == "POST":
+        existing = monitor_schedule.load()
+        config = {
+            "enabled": request.form.get("enabled") == "1",
+            "interval_minutes": request.form.get("interval_minutes", type=int) or 5,
+            "batch_size": request.form.get("batch_size", type=int) or 60,
+            "heartbeat_minutes": request.form.get("heartbeat_minutes", type=int) or 60,
+            "last_run_at": existing.get("last_run_at"),
+            "last_run_summary": existing.get("last_run_summary"),
+        }
+        monitor_schedule.save(config)
+    return jsonify(monitor_schedule.load())
+
+
 REPORT_KIND_CHOICES = ("summary", "hosts")
 
 
@@ -1196,7 +1385,48 @@ def start_report_scheduler():
         threading.Thread(target=_report_scheduler_loop, daemon=True).start()
 
 
+def run_scheduled_monitor_if_due():
+    """Se il monitoraggio è attivo ed è trascorso l'intervallo configurato,
+    esegue un ciclo di controllo raggiungibilità su tutti gli host noti."""
+    config = monitor_schedule.load()
+    now = datetime.datetime.now()
+    if not monitor_schedule.is_due(config, now):
+        return
+
+    conn = scanner_db.connect(str(DB_PATH))
+    try:
+        scanner_db.ensure_monitor_tables(conn)
+        summary = host_monitor.run_monitor_cycle(
+            conn,
+            batch_size=config.get("batch_size") or 60,
+            heartbeat_minutes=config.get("heartbeat_minutes") or 60,
+        )
+    finally:
+        conn.close()
+    monitor_schedule.mark_run(now, summary)
+
+
+def _monitor_scheduler_loop():
+    while True:
+        try:
+            run_scheduled_monitor_if_due()
+        except Exception as e:
+            print(f"[monitor-scheduler] errore inatteso: {e}")
+        time.sleep(30)  # granularità minuti: controlla più spesso del report scheduler
+
+
+def start_monitor_scheduler():
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not APP_DEBUG:
+        threading.Thread(target=_monitor_scheduler_loop, daemon=True).start()
+
+
 if __name__ == "__main__":
-    APP_DEBUG = True
+    # Uso nativo di sempre: 127.0.0.1, debug/reloader attivi. Nel container
+    # Docker (Dockerfile imposta APP_HOST=0.0.0.0/FLASK_DEBUG=0) il server
+    # deve essere raggiungibile da fuori e il reloader va disattivato.
+    APP_DEBUG = os.environ.get("FLASK_DEBUG", "1") == "1"
+    APP_HOST = os.environ.get("APP_HOST", "127.0.0.1")
+    APP_PORT = int(os.environ.get("APP_PORT", "5200"))
     start_report_scheduler()
-    app.run(host="127.0.0.1", port=5200, debug=APP_DEBUG)
+    start_monitor_scheduler()
+    app.run(host=APP_HOST, port=APP_PORT, debug=APP_DEBUG)

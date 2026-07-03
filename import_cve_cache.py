@@ -21,7 +21,7 @@ import cve_lookup
 import scanner_db
 
 BASE = Path(__file__).parent
-DB_PATH = BASE / "instance" / "inventory.db"
+DB_PATH = scanner_db.resolve_db_target(BASE / "instance" / "inventory.db")
 
 
 def main():

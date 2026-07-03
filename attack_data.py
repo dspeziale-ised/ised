@@ -111,17 +111,19 @@ def parse_and_load(conn, raw_bytes):
 
     cur.executemany(
         "INSERT INTO attack_tactics (shortname, name, description, url, sort_order) "
-        "VALUES (:shortname, :name, :description, :url, :sort_order)",
-        tactic_rows,
+        "VALUES (?, ?, ?, ?, ?)",
+        [(r["shortname"], r["name"], r["description"], r["url"], r["sort_order"]) for r in tactic_rows],
     )
     cur.executemany(
         "INSERT INTO attack_techniques "
         "(technique_id, name, description, url, is_subtechnique, parent_technique_id, platforms) "
-        "VALUES (:technique_id, :name, :description, :url, :is_subtechnique, :parent_technique_id, :platforms)",
-        technique_rows,
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [(r["technique_id"], r["name"], r["description"], r["url"], r["is_subtechnique"],
+          r["parent_technique_id"], r["platforms"]) for r in technique_rows],
     )
     cur.executemany(
-        "INSERT OR IGNORE INTO attack_technique_tactics (technique_id, tactic_shortname) VALUES (?, ?)",
+        "INSERT INTO attack_technique_tactics (technique_id, tactic_shortname) VALUES (?, ?) "
+        "ON CONFLICT DO NOTHING",
         technique_tactic_pairs,
     )
     conn.commit()
@@ -146,7 +148,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Scarica e carica la matrice MITRE ATT&CK")
-    parser.add_argument("--db", default="instance/inventory.db")
+    parser.add_argument("--db", default=scanner_db.resolve_db_target(Path(__file__).parent / "instance" / "inventory.db"))
     parser.add_argument("--force", action="store_true", help="Riscarica e ricarica anche se già presente")
     args = parser.parse_args()
 

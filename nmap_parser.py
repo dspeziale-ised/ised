@@ -11,6 +11,13 @@ def parse_host_element(elem):
     """Converte un elemento <host> dell'XML di nmap in un dict pronto per il DB."""
     status = elem.find("status")
     state = status.get("state") if status is not None else None
+    # reason ('echo-reply' = ha risposto a un ping ICMP, 'syn-ack' = porta TCP
+    # aperta, ecc.) e reason_ttl (TTL con cui è arrivata la risposta): usati
+    # come euristica di riserva in classify.py quando OS match/porte non
+    # bastano — un TTL di partenza stimato a 255 è tipico di apparati di rete.
+    status_reason = status.get("reason") if status is not None else None
+    reason_ttl_raw = status.get("reason_ttl") if status is not None else None
+    ttl = int(reason_ttl_raw) if reason_ttl_raw not in (None, "", "0") else None
 
     ip = None
     mac_address = None
@@ -86,6 +93,8 @@ def parse_host_element(elem):
         "mac_address": mac_address,
         "mac_vendor": mac_vendor,
         "state": state,
+        "status_reason": status_reason,
+        "ttl": ttl,
         "timed_out": elem.get("timedout") == "true",
         "distance": distance,
         "os_name": best_os.get("name"),

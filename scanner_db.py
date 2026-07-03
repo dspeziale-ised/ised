@@ -1,8 +1,146 @@
-"""Schema e funzioni di accesso al database SQLite dell'inventario host."""
+"""Schema e funzioni di accesso al database dell'inventario host.
+
+Supporta due backend:
+- SQLite (default, uso nativo/non containerizzato): db_path è un percorso
+  file, comportamento identico a sempre.
+- PostgreSQL (uso nel container Docker): db_path è una URL
+  'postgresql://user:pass@host:port/dbname'. connect() ritorna in quel caso
+  un oggetto PgConnection che espone la stessa interfaccia "di comodo" usata
+  in tutto il progetto (conn.execute(sql, params) con placeholder '?',
+  righe leggibili come dict, .lastrowid, .executescript()), così il resto
+  del codice non deve sapere quale backend è in uso.
+"""
 
 import json
+import os
+import re
 import sqlite3
+from datetime import datetime, timedelta
 from pathlib import Path
+
+try:
+    import psycopg2
+    import psycopg2.extras
+except ImportError:
+    psycopg2 = None
+
+
+def _now():
+    """Timestamp corrente in ISO 8601, usato al posto di datetime('now') /
+    NOW() lato SQL — evita differenze di dialetto e funziona identico su
+    colonne TEXT sia in SQLite che in PostgreSQL."""
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def is_postgres_url(db_path):
+    return isinstance(db_path, str) and db_path.startswith(("postgres://", "postgresql://"))
+
+
+def resolve_db_target(default_sqlite_path):
+    """Target DB da usare in uno script CLI: la variabile d'ambiente
+    DATABASE_URL (postgresql://...) se impostata — così è che il container
+    Docker punta al servizio Postgres, senza dover passare un --db esplicito
+    ad ogni script — altrimenti il percorso file SQLite indicato di default
+    (comportamento nativo di sempre)."""
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if url and is_postgres_url(url):
+        return url
+    return str(default_sqlite_path)
+
+
+_INSERT_TABLE_RE = re.compile(r"^\s*INSERT\s+INTO\s+([a-zA-Z_][a-zA-Z0-9_]*)", re.IGNORECASE)
+# Tabelle con colonna 'id' SERIAL: su queste, un INSERT senza già una
+# RETURNING esplicita si vede aggiungere automaticamente "RETURNING id" per
+# poter emulare cursor.lastrowid di sqlite3 (che Postgres non ha).
+_TABLES_WITH_ID = {
+    "hosts", "os_matches", "services", "scans", "host_roles",
+    "service_scripts", "host_vulnerabilities", "host_attack_techniques",
+    "host_status_checks",
+}
+
+
+def _adapt_schema_for_postgres(sql):
+    return re.sub(r"\bINTEGER PRIMARY KEY AUTOINCREMENT\b", "SERIAL PRIMARY KEY", sql)
+
+
+class _PgCursor:
+    """Cursore compatibile con l'uso di sqlite3.Cursor in questo progetto:
+    placeholder '?' tradotti in '%s', righe come dict, .lastrowid emulato
+    via RETURNING id automatico sugli INSERT nelle tabelle con quella
+    colonna."""
+
+    def __init__(self, raw_cursor):
+        self._cursor = raw_cursor
+        self.lastrowid = None
+
+    @staticmethod
+    def _translate(sql):
+        return sql.replace("?", "%s")
+
+    def execute(self, sql, params=()):
+        pg_sql = self._translate(sql)
+        stripped = pg_sql.strip()
+        match = _INSERT_TABLE_RE.match(stripped)
+        auto_returning = False
+        if match and match.group(1).lower() in _TABLES_WITH_ID and "RETURNING" not in stripped.upper():
+            pg_sql = stripped.rstrip(";") + " RETURNING id"
+            auto_returning = True
+        self._cursor.execute(pg_sql, params)
+        if auto_returning:
+            row = self._cursor.fetchone()
+            self.lastrowid = row["id"] if row else None
+        return self
+
+    def executemany(self, sql, seq_of_params):
+        self._cursor.executemany(self._translate(sql), seq_of_params)
+        return self
+
+    def fetchone(self):
+        row = self._cursor.fetchone()
+        return dict(row) if row is not None else None
+
+    def fetchall(self):
+        return [dict(r) for r in self._cursor.fetchall()]
+
+    def __iter__(self):
+        return (dict(r) for r in self._cursor)
+
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+
+
+class PgConnection:
+    """Wrapper minimale su una connessione psycopg2 per esporre la stessa
+    interfaccia "di comodo" usata ovunque nel progetto su sqlite3.Connection
+    (conn.execute(...) diretto, righe come dict, .executescript, ecc.)."""
+
+    def __init__(self, raw_conn):
+        self._conn = raw_conn
+
+    def cursor(self):
+        raw_cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        return _PgCursor(raw_cursor)
+
+    def execute(self, sql, params=()):
+        cur = self.cursor()
+        cur.execute(sql, params)
+        return cur
+
+    def executescript(self, sql):
+        with self._conn.cursor() as cur:
+            cur.execute(_adapt_schema_for_postgres(sql))
+        self._conn.commit()
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS hosts (
@@ -141,6 +279,17 @@ CREATE TABLE IF NOT EXISTS host_attack_techniques (
     detected_at  TEXT
 );
 
+-- Storico raggiungibilità host: un check periodico (nmap -sn via
+-- host_monitor.py) registra una riga solo al CAMBIO di stato o dopo un
+-- "battito" periodico (default ogni ora anche senza cambi), per limitare
+-- la crescita della tabella pur mantenendo uno storico utile.
+CREATE TABLE IF NOT EXISTS host_status_checks (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id    INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    status     TEXT NOT NULL,   -- 'up' oppure 'down'
+    checked_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_os_matches_host ON os_matches(host_id);
 CREATE INDEX IF NOT EXISTS idx_services_host ON services(host_id);
 CREATE INDEX IF NOT EXISTS idx_hosts_device_type ON hosts(device_type);
@@ -151,12 +300,24 @@ CREATE INDEX IF NOT EXISTS idx_attack_technique_tactics_tactic ON attack_techniq
 CREATE INDEX IF NOT EXISTS idx_host_attack_techniques_host ON host_attack_techniques(host_id);
 CREATE INDEX IF NOT EXISTS idx_host_attack_techniques_technique ON host_attack_techniques(technique_id);
 CREATE INDEX IF NOT EXISTS idx_host_vulnerabilities_cve ON host_vulnerabilities(cve_id);
+CREATE INDEX IF NOT EXISTS idx_host_status_checks_host ON host_status_checks(host_id, checked_at);
 """
 
 
 def connect(db_path):
-    """Apre (creando se serve) il DB SQLite in db_path. Crea anche la
-    cartella contenente il file (es. instance/) se non esiste già."""
+    """Apre una connessione al DB. Se db_path è una URL 'postgresql://...'
+    si connette a PostgreSQL (uso nel container Docker); altrimenti è
+    trattato come percorso file SQLite (uso nativo, come sempre) — crea
+    anche la cartella contenente il file (es. instance/) se non esiste."""
+    if is_postgres_url(db_path):
+        if psycopg2 is None:
+            raise RuntimeError(
+                "psycopg2 non installato: necessario per usare un DATABASE_URL postgresql://... "
+                "('pip install psycopg2-binary')."
+            )
+        raw_conn = psycopg2.connect(db_path)
+        return PgConnection(raw_conn)
+
     path = Path(db_path)
     if path.parent and not path.parent.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -166,11 +327,24 @@ def connect(db_path):
     return conn
 
 
+def _get_columns(conn, table):
+    """Nomi delle colonne di una tabella, indipendentemente dal backend."""
+    if isinstance(conn, PgConnection):
+        rows = conn.execute(
+            "SELECT column_name AS name FROM information_schema.columns WHERE table_name = ?",
+            (table,),
+        ).fetchall()
+    else:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return {row["name"] for row in rows}
+
+
 def init_db(conn):
     conn.executescript(SCHEMA)
     conn.commit()
     ensure_ai_columns(conn)
     ensure_service_columns(conn)
+    ensure_fingerprint_columns(conn)
 
 
 AI_COLUMNS = {
@@ -187,11 +361,19 @@ SERVICE_COLUMNS = {
     "cpe": "TEXT",
 }
 
+# reason ('echo-reply'/'syn-ack'/...) e ttl della risposta di stato nmap:
+# usati come euristica di riserva in classify.py (vedi guess_ttl_baseline)
+# quando OS match/porte non bastano a determinare il tipo dispositivo.
+FINGERPRINT_COLUMNS = {
+    "status_reason": "TEXT",
+    "ttl": "INTEGER",
+}
+
 
 def ensure_service_columns(conn):
     """Aggiunge le colonne extra su services (es. cpe) se non esistono già."""
     conn.executescript(SCHEMA)  # crea le tabelle nuove (host_roles, cve_cache, ecc.) se il DB è preesistente
-    existing = {row["name"] for row in conn.execute("PRAGMA table_info(services)")}
+    existing = _get_columns(conn, "services")
     added = False
     for col, col_type in SERVICE_COLUMNS.items():
         if col not in existing:
@@ -204,9 +386,22 @@ def ensure_service_columns(conn):
 def ensure_ai_columns(conn):
     """Aggiunge le colonne per la classificazione AI (Groq) se non esistono già.
     Migrazione additiva e idempotente, sicura da chiamare su un DB già popolato."""
-    existing = {row["name"] for row in conn.execute("PRAGMA table_info(hosts)")}
+    existing = _get_columns(conn, "hosts")
     added = False
     for col, col_type in AI_COLUMNS.items():
+        if col not in existing:
+            conn.execute(f"ALTER TABLE hosts ADD COLUMN {col} {col_type}")
+            added = True
+    if added:
+        conn.commit()
+
+
+def ensure_fingerprint_columns(conn):
+    """Aggiunge status_reason/ttl su hosts se non esistono già (migrazione
+    additiva e idempotente, sicura su un DB già popolato)."""
+    existing = _get_columns(conn, "hosts")
+    added = False
+    for col, col_type in FINGERPRINT_COLUMNS.items():
         if col not in existing:
             conn.execute(f"ALTER TABLE hosts ADD COLUMN {col} {col_type}")
             added = True
@@ -239,8 +434,8 @@ def set_host_roles(conn, host_id, roles, source="ai"):
         if not role:
             continue
         conn.execute(
-            "INSERT INTO host_roles (host_id, role, source, created_at) VALUES (?, ?, ?, datetime('now'))",
-            (host_id, role, source),
+            "INSERT INTO host_roles (host_id, role, source, created_at) VALUES (?, ?, ?, ?)",
+            (host_id, role, source, _now()),
         )
     conn.commit()
 
@@ -263,9 +458,9 @@ def get_cached_cve(conn, cpe):
 
 def set_cached_cve(conn, cpe, cve_list):
     conn.execute(
-        """INSERT INTO cve_cache (cpe, cve_json, fetched_at) VALUES (?, ?, datetime('now'))
+        """INSERT INTO cve_cache (cpe, cve_json, fetched_at) VALUES (?, ?, ?)
            ON CONFLICT(cpe) DO UPDATE SET cve_json = excluded.cve_json, fetched_at = excluded.fetched_at""",
-        (cpe, json.dumps(cve_list)),
+        (cpe, json.dumps(cve_list), _now()),
     )
     conn.commit()
 
@@ -307,8 +502,8 @@ def set_host_vulnerabilities(conn, host_id, port, cpe, cve_list, source):
     for cve in cve_list:
         conn.execute(
             """INSERT INTO host_vulnerabilities (host_id, port, cpe, cve_id, cvss, url, source, detected_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
-            (host_id, port, cpe, cve.get("id"), cve.get("cvss"), cve.get("url"), source),
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (host_id, port, cpe, cve.get("id"), cve.get("cvss"), cve.get("url"), source, _now()),
         )
     conn.commit()
 
@@ -331,8 +526,8 @@ def set_host_attack_techniques(conn, host_id, techniques, source="heuristic"):
             continue
         conn.execute(
             """INSERT INTO host_attack_techniques (host_id, technique_id, reason, source, detected_at)
-               VALUES (?, ?, ?, ?, datetime('now'))""",
-            (host_id, technique_id, t.get("reason", ""), source),
+               VALUES (?, ?, ?, ?, ?)""",
+            (host_id, technique_id, t.get("reason", ""), source, _now()),
         )
     conn.commit()
 
@@ -404,6 +599,153 @@ def hosts_for_technique(conn, technique_id):
     return [dict(r) for r in rows]
 
 
+def ensure_monitor_tables(conn):
+    """Crea la tabella host_status_checks se mancante (DB preesistente)."""
+    conn.executescript(SCHEMA)
+    conn.commit()
+
+
+def get_latest_status_check(conn, host_id):
+    row = conn.execute(
+        "SELECT status, checked_at FROM host_status_checks WHERE host_id = ? ORDER BY id DESC LIMIT 1",
+        (host_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def record_host_status_if_needed(conn, host_id, status, checked_at, heartbeat_minutes=60):
+    """Inserisce una riga di storico solo al CAMBIO di stato rispetto
+    all'ultimo check noto, oppure se è passato più di heartbeat_minutes
+    dall'ultimo check (un "battito" periodico anche senza cambi, per poter
+    calcolare l'uptime% anche su host sempre nello stesso stato). Limita la
+    crescita della tabella pur mantenendo uno storico utile. Ritorna True se
+    ha scritto una nuova riga."""
+    last = get_latest_status_check(conn, host_id)
+    if last and last["status"] == status:
+        try:
+            last_dt = datetime.fromisoformat(last["checked_at"])
+            now_dt = datetime.fromisoformat(checked_at)
+            elapsed_minutes = (now_dt - last_dt).total_seconds() / 60
+        except ValueError:
+            elapsed_minutes = heartbeat_minutes + 1
+        if elapsed_minutes < heartbeat_minutes:
+            return False
+
+    conn.execute(
+        "INSERT INTO host_status_checks (host_id, status, checked_at) VALUES (?, ?, ?)",
+        (host_id, status, checked_at),
+    )
+    conn.commit()
+    return True
+
+
+def get_host_status_history(conn, host_id, limit=200):
+    rows = conn.execute(
+        "SELECT status, checked_at FROM host_status_checks WHERE host_id = ? ORDER BY id DESC LIMIT ?",
+        (host_id, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def host_uptime_percent(conn, host_id, since_hours=24):
+    """Percentuale di tempo 'up' nella finestra [ora - since_hours, ora],
+    ricostruita dagli intervalli fra check consecutivi (dato che si registra
+    solo al cambio di stato + battito periodico, non ogni singolo check).
+    Ritorna None se non c'è storico sufficiente per stimarla."""
+    since_dt = datetime.now() - timedelta(hours=since_hours)
+    now_dt = datetime.now()
+    rows = conn.execute(
+        "SELECT status, checked_at FROM host_status_checks WHERE host_id = ? ORDER BY id ASC",
+        (host_id,),
+    ).fetchall()
+    if not rows:
+        return None
+
+    total_seconds = 0.0
+    up_seconds = 0.0
+    for i, row in enumerate(rows):
+        try:
+            start = datetime.fromisoformat(row["checked_at"])
+        except ValueError:
+            continue
+        end = None
+        if i + 1 < len(rows):
+            try:
+                end = datetime.fromisoformat(rows[i + 1]["checked_at"])
+            except ValueError:
+                end = None
+        end = end or now_dt
+        start = max(start, since_dt)
+        end = min(end, now_dt)
+        if end <= start:
+            continue
+        duration = (end - start).total_seconds()
+        total_seconds += duration
+        if row["status"] == "up":
+            up_seconds += duration
+
+    if total_seconds <= 0:
+        return None
+    return round(up_seconds / total_seconds * 100, 1)
+
+
+def monitor_summary(conn):
+    """Stato corrente aggregato su tutti gli host (ultimo check noto per
+    ciascuno): {'total_hosts', 'up', 'down', 'never_checked'}."""
+    rows = conn.execute(
+        """SELECT hsc.status
+           FROM host_status_checks hsc
+           JOIN (SELECT host_id, MAX(id) max_id FROM host_status_checks GROUP BY host_id) latest
+             ON latest.host_id = hsc.host_id AND latest.max_id = hsc.id"""
+    ).fetchall()
+    total_hosts = conn.execute("SELECT COUNT(*) c FROM hosts").fetchone()["c"]
+    up = sum(1 for r in rows if r["status"] == "up")
+    down = sum(1 for r in rows if r["status"] == "down")
+    return {
+        "total_hosts": total_hosts,
+        "up": up,
+        "down": down,
+        "never_checked": total_hosts - len(rows),
+    }
+
+
+def hosts_hourly_status(conn, date_str):
+    """Stato di ogni host ora per ora per il giorno 'date_str' (YYYY-MM-DD):
+    per ciascuna delle 24 ore, l'ultimo check noto con checked_at entro la
+    fine di quell'ora (stato "riportato avanti" dall'ultimo cambio noto,
+    dato che lo storico registra solo su cambio + battito periodico). None
+    se non c'è ancora nessun check noto a quel punto. Ritorna
+    {host_id: [stato_o_None x24]}."""
+    day_start = datetime.fromisoformat(date_str)
+    day_end = day_start + timedelta(days=1)
+
+    rows = conn.execute(
+        "SELECT host_id, status, checked_at FROM host_status_checks "
+        "WHERE checked_at < ? ORDER BY host_id, checked_at",
+        (day_end.isoformat(),),
+    ).fetchall()
+
+    by_host = {}
+    for r in rows:
+        by_host.setdefault(r["host_id"], []).append((r["checked_at"], r["status"]))
+
+    result = {}
+    for host_id, checks in by_host.items():
+        hourly = []
+        idx = 0
+        current_status = None
+        total = len(checks)
+        for hour in range(24):
+            hour_end_iso = (day_start + timedelta(hours=hour + 1)).isoformat()
+            while idx < total and checks[idx][0] < hour_end_iso:
+                current_status = checks[idx][1]
+                idx += 1
+            hourly.append(current_status)
+        result[host_id] = hourly
+
+    return result
+
+
 def upsert_host(conn, host):
     """Inserisce/aggiorna un host e sostituisce le sue righe os_matches/services."""
     cur = conn.execute("SELECT id FROM hosts WHERE ip = ?", (host["ip"],))
@@ -411,7 +753,8 @@ def upsert_host(conn, host):
 
     fields = (
         host["ip"], host.get("hostname"), host.get("mac_address"),
-        host.get("mac_vendor"), host.get("state"), int(host.get("timed_out", False)),
+        host.get("mac_vendor"), host.get("state"), host.get("status_reason"), host.get("ttl"),
+        int(host.get("timed_out", False)),
         host.get("distance"), host.get("os_name"), host.get("os_accuracy"),
         host.get("os_family"), host.get("os_gen"), host.get("device_type"),
         host.get("device_vendor"), host.get("last_scanned"), host.get("scan_duration"),
@@ -424,6 +767,7 @@ def upsert_host(conn, host):
         # impostati manualmente dal dettaglio host (device_type_manual = 1).
         conn.execute(
             """UPDATE hosts SET hostname=?, mac_address=?, mac_vendor=?, state=?,
+                   status_reason=?, ttl=?,
                    timed_out=?, distance=?, os_name=?, os_accuracy=?, os_family=?,
                    os_gen=?,
                    device_type = CASE WHEN device_type_manual = 1 THEN device_type ELSE ? END,
@@ -437,9 +781,10 @@ def upsert_host(conn, host):
     else:
         cur = conn.execute(
             """INSERT INTO hosts (ip, hostname, mac_address, mac_vendor, state,
+                   status_reason, ttl,
                    timed_out, distance, os_name, os_accuracy, os_family, os_gen,
                    device_type, device_vendor, last_scanned, scan_duration, raw_xml_path)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             fields,
         )
         host_id = cur.lastrowid
@@ -465,8 +810,8 @@ def upsert_host(conn, host):
         for script in s.get("scripts", []):
             conn.execute(
                 """INSERT INTO service_scripts (service_id, script_id, output, collected_at)
-                   VALUES (?, ?, ?, datetime('now'))""",
-                (service_id, script.get("id"), script.get("output")),
+                   VALUES (?, ?, ?, ?)""",
+                (service_id, script.get("id"), script.get("output"), _now()),
             )
 
     return host_id

@@ -33,6 +33,7 @@ import hashlib
 import json
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import gemini_client
@@ -50,7 +51,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 BASE = Path(__file__).parent
-DB_PATH = BASE / "instance" / "inventory.db"
+DB_PATH = scanner_db.resolve_db_target(BASE / "instance" / "inventory.db")
 LOCK_FILE = BASE / "classify.lock"
 GROUPS_PER_REQUEST = 6
 SLEEP_BETWEEN_REQUESTS = 3.0
@@ -180,7 +181,7 @@ def apply_results(conn, batch, results, provider_name):
             # manualmente dal dettaglio host (device_type_manual = 1).
             conn.execute(
                 """UPDATE hosts SET ai_device_type = ?, ai_confidence = ?,
-                       ai_reasoning = ?, ai_classified_at = datetime('now'), ai_provider = ?,
+                       ai_reasoning = ?, ai_classified_at = ?, ai_provider = ?,
                        device_type = CASE WHEN device_type_manual = 1 THEN device_type
                                            ELSE COALESCE(?, device_type) END,
                        device_vendor = CASE WHEN device_type_manual = 1 THEN device_vendor
@@ -190,6 +191,7 @@ def apply_results(conn, batch, results, provider_name):
                     ai_device_type,
                     result.get("confidence"),
                     result.get("reasoning"),
+                    datetime.now().isoformat(timespec="seconds"),
                     provider_name,
                     device_type_raw,
                     vendor,

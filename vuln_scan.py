@@ -21,7 +21,6 @@ Uso:
 """
 
 import argparse
-import shutil
 import subprocess
 import sys
 import time
@@ -29,6 +28,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import cve_lookup
+import nmap_proxy_client
 import nvd_client
 import scanner_db
 from job_lock import JobLock
@@ -37,9 +37,8 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 BASE = Path(__file__).parent
-DB_PATH = BASE / "instance" / "inventory.db"
+DB_PATH = scanner_db.resolve_db_target(BASE / "instance" / "inventory.db")
 LOCK_FILE = BASE / "vuln.lock"
-NMAP_BIN = shutil.which("nmap") or "nmap"
 # Rate limit pubblico NVD senza API key: 5 richieste/30s (con key: 50/30s).
 # Una pausa conservativa evita di beccare il rate limit su run lunghi.
 NVD_SLEEP_NO_KEY = 6.5
@@ -67,8 +66,8 @@ def fetch_vulners_output(ip, port, timeout=90):
     """Esegue nmap --script vulners su un singolo host:porta e ritorna
     l'output testuale dello script 'vulners' (o None se assente/errore)."""
     try:
-        result = subprocess.run(
-            [NMAP_BIN, "-Pn", "-p", str(port), "--script", "vulners", "-oX", "-", ip],
+        result = nmap_proxy_client.run_nmap(
+            ["-Pn", "-p", str(port), "--script", "vulners", "-oX", "-", ip],
             capture_output=True, text=True, timeout=timeout,
         )
     except subprocess.TimeoutExpired:

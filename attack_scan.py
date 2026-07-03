@@ -27,7 +27,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 BASE = Path(__file__).parent
-DB_PATH = BASE / "instance" / "inventory.db"
+DB_PATH = scanner_db.resolve_db_target(BASE / "instance" / "inventory.db")
 LOCK_FILE = BASE / "attack.lock"
 
 

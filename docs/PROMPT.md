@@ -13,37 +13,58 @@ ripetere gli stessi errori.
 Crea un'applicazione web Python (Flask) per l'inventario di una rete
 aziendale privata (range 10.0.0.0/8), che:
 
-1. Scansiona la rete con **nmap** (OS detection, servizi, script NSE) e
-   registra tutto in un database **SQLite**
+1. Fa **discovery** (ping-sweep automatizzato su tutta la /8) e scansiona la
+   rete con **nmap** (OS detection, servizi, script NSE), registrando tutto
+   in un database (**SQLite** in uso nativo, **PostgreSQL** se containerizzata)
 2. Classifica il **tipo di dispositivo** di ogni host usando un **LLM**
-   (con fallback automatico tra più provider: Ollama, Groq, Gemini)
+   (con fallback automatico tra più provider: Ollama, Groq, Gemini) più
+   un'euristica di riserva basata su porte/OS/TTL della risposta ping
 3. Associa alle porte/servizi rilevati le **CVE reali** note (fonte
-   ufficiale NVD, con cache locale)
-4. Espone tutto tramite una **web UI** (Flask + AdminLTE 3 + DataTables),
+   ufficiale NVD, con cache locale) e le mappa sulla matrice **MITRE
+   ATT&CK** ufficiale
+4. **Monitora periodicamente** la raggiungibilità di ogni host, con uno
+   storico consultabile (uptime%, griglia oraria)
+5. Genera **report PDF** su richiesta o in automatico, inviabili via
+   **Telegram**/**Gmail**
+6. Espone tutto tramite una **web UI** (Flask + AdminLTE 3 + DataTables),
    dalla quale si avviano tutte le operazioni — **nessun comando da
    terminale richiesto** per l'uso quotidiano
+7. È **containerizzabile** (Docker + docker-compose): nmap resta fuori dal
+   container (problemi noti coi driver raw-socket dentro Docker su
+   Windows), le scansioni passano da un proxy HTTP che gira nativamente
+   sull'host
 
 ## Stack tecnico
 
-- Backend: Python 3 + Flask (no ORM, `sqlite3` diretto con `Row` factory)
-- Frontend: AdminLTE 3 (tema chiaro di default con toggle scuro) +
-  Bootstrap 4 + DataTables (server-side processing) + Chart.js, tutto via
-  CDN (nessun asset da compilare/bundlare)
-- Scanner: `nmap` invocato via `subprocess`, output parsato da XML
-  (`xml.etree.ElementTree`, con `iterparse` per file grandi/troncati)
+- Backend: Python 3 + Flask (no ORM). Accesso DB con un'interfaccia
+  "di comodo" unica per due backend: `sqlite3` diretto con `Row` factory in
+  uso nativo, oppure un wrapper su `psycopg2` (stessa interfaccia:
+  `conn.execute(sql, params)` con placeholder `?`, righe come dict,
+  `.lastrowid` emulato) quando containerizzata (vedi sezione Docker)
+- Frontend: AdminLTE 3 (tema chiaro di default con toggle scuro, sidebar a
+  menu/sottomenu) + Bootstrap 4 + DataTables (server-side processing) +
+  Chart.js, tutto via CDN (nessun asset da compilare/bundlare)
+- Scanner: `nmap` invocato tramite un client (`nmap_proxy_client.run_nmap`)
+  che in uso nativo esegue `subprocess.run(["nmap", *args], ...)` e in
+  modalità container inoltra via HTTP a un proxy sull'host — stesso
+  comportamento visto dal chiamante in entrambi i casi. Output parsato da
+  XML (`xml.etree.ElementTree`, con `iterparse` per file grandi/troncati)
 - LLM: chiamate HTTP dirette via `urllib.request` (no SDK) verso Ollama
   Cloud, Groq, Gemini — tutte con interfaccia Chat Completions compatibile
   OpenAI (tranne Gemini che ha un formato proprio)
 - CVE: API REST pubblica NVD (`https://services.nvd.nist.gov/rest/json/cves/2.0`)
+- PDF: `reportlab` (nessuna dipendenza da binari esterni tipo wkhtmltopdf)
+- Notifiche: Telegram Bot API (`requests`), Gmail via `smtplib`/App Password
 
-## Struttura dati (schema SQLite)
+## Struttura dati (schema SQLite; PostgreSQL è lo stesso schema tradotto, vedi sezione Docker)
 
 ```sql
 CREATE TABLE hosts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ip TEXT UNIQUE NOT NULL,
     hostname TEXT, mac_address TEXT, mac_vendor TEXT,
-    state TEXT, timed_out INTEGER DEFAULT 0, distance INTEGER,
+    state TEXT, status_reason TEXT, ttl INTEGER,  -- reason/TTL della risposta nmap (echo-reply, syn-ack, ...)
+    timed_out INTEGER DEFAULT 0, distance INTEGER,
     os_name TEXT, os_accuracy INTEGER, os_family TEXT, os_gen TEXT,
     device_type TEXT, device_vendor TEXT,       -- campo "operativo", usato in tutta la UI
     device_type_manual INTEGER DEFAULT 0,        -- 1 = impostato a mano, protetto da sovrascrittura
@@ -66,16 +87,38 @@ CREATE TABLE attack_techniques (technique_id TEXT PRIMARY KEY, name, description
                                  is_subtechnique INTEGER DEFAULT 0, parent_technique_id, platforms);
 CREATE TABLE attack_technique_tactics (technique_id FK, tactic_shortname FK, PRIMARY KEY (technique_id, tactic_shortname));
 CREATE TABLE host_attack_techniques (id, host_id FK, technique_id, reason, source, detected_at);  -- mappatura euristica
+
+-- Storico raggiungibilità (monitoraggio periodico)
+CREATE TABLE host_status_checks (id, host_id FK, status TEXT, checked_at TEXT);  -- 'up'/'down', una riga per cambio+battito
 ```
 
 Tutte le migrazioni devono essere **additive e idempotenti** (`ALTER TABLE
 ... ADD COLUMN` solo se la colonna non esiste già, verificato con
-`PRAGMA table_info`), eseguite automaticamente all'avvio di ogni script,
-mai a mano.
+`PRAGMA table_info` su SQLite / `information_schema.columns` su Postgres),
+eseguite automaticamente all'avvio di ogni script (compresa la creazione
+delle tabelle stesse, `CREATE TABLE IF NOT EXISTS`: importante soprattutto
+per Postgres, dove un database appena creato non ha nessuno schema ad
+attenderlo — l'app web è spesso la prima a connettersi), mai a mano.
 
 ## Funzionalità da implementare (in ordine logico)
 
-### 1. Estrazione IP attivi
+### 1. Discovery iniziale
+
+Script che esegue un **ping-sweep** (`nmap -sn`) su tutte le 256 subnet
+/16 di una rete /8, con parallelismo controllato (default 8 in parallelo),
+un file XML per subnet. Due implementazioni equivalenti:
+- **PowerShell** (`Start-Job` per il parallelismo, throttle "rolling" a
+  N job attivi): usata in esecuzione nativa su Windows
+- **Python** (`ThreadPoolExecutor`, stesso limite di parallelismo): usata
+  quando l'app è containerizzata (niente PowerShell in un container Linux),
+  passa dal client nmap descritto nella sezione Docker
+
+La scelta fra le due è automatica in base a una variabile d'ambiente che
+segnala la modalità container. Su Windows, `-sn` richiede privilegi di
+amministratore per risultati completi — se l'app non gira elevata, avvisa
+chiaramente in UI che alcuni host potrebbero non essere rilevati.
+
+### 2. Estrazione IP attivi
 
 Script che parsa uno o più file XML di output nmap (`nmap -sn ... -oX
 file.xml`, ping sweep) ed estrae gli IP con `status state="up"`. Deve:
@@ -85,7 +128,7 @@ file.xml`, ping sweep) ed estrae gli IP con `status state="up"`. Deve:
 - Accettare **più file** in input (o auto-scoprire tutti i `*.xml` in una
   cartella `data/`), unendo gli IP e deduplicando
 
-### 2. Scansione OS/servizi a batch
+### 3. Scansione OS/servizi a batch
 
 Script che, dato un file di IP:
 - Li divide in batch (default 32 host)
@@ -106,7 +149,7 @@ Script che, dato un file di IP:
 - Supporta `--resume` (salta IP già presenti nel DB) per rilanci incrementali
 - Registra ogni batch in una tabella `scans` (per il log/stato UI)
 
-### 3. Classificazione AI multi-provider con fallback
+### 4. Classificazione AI multi-provider con fallback
 
 Modulo condiviso (`llm_common`) con:
 - **Eccezioni comuni** tra provider: `LLMError`, `LLMTooLargeError`,
@@ -177,7 +220,7 @@ Orchestratore che:
   codepage di default della console Windows non sa rappresentare,
   causando `UnicodeEncodeError` a metà esecuzione
 
-### 4. Scansione vulnerabilità (CVE)
+### 5. Scansione vulnerabilità (CVE)
 
 - Raggruppa i servizi per **CPE identica** (non per host: molti host
   condividono lo stesso prodotto/versione)
@@ -200,7 +243,7 @@ Orchestratore che:
   o JSON (oggetto `{"<cpe>": [...]}` o lista di record), che fa **merge**
   con la cache esistente per la stessa CPE (non sovrascrive)
 
-### 5. Mappatura MITRE ATT&CK
+### 6. Mappatura MITRE ATT&CK
 
 - Scarica il dataset ufficiale **MITRE ATT&CK Enterprise** (STIX 2.1,
   `raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json`,
@@ -229,11 +272,47 @@ Orchestratore che:
 - Essendo una computazione locale ed economica, ricalcola la mappatura per
   **tutti** gli host ad ogni esecuzione (a differenza di classify/vuln non
   serve un concetto di "solo i nuovi")
-- Vista a **matrice colorata**: colonne = tattiche, celle = tecniche,
-  intensità colore = numero di host esposti a quella tecnica; click su una
-  cella mostra l'elenco degli host coinvolti e il motivo della mappatura
+- Vista a **pannelli collassabili per tattica** (non una griglia a scroll
+  orizzontale — scomoda con 15+ colonne): ogni tattica è un pannello con le
+  sue tecniche come chip colorati per numero di host esposti; click su una
+  tecnica mostra l'elenco degli host coinvolti e il motivo della mappatura
 
-### 6. Web UI (Flask + AdminLTE)
+### 7. Monitoraggio raggiungibilità host
+
+Script che esegue periodicamente un ping-sweep (`nmap -sn`, a batch) su
+tutti gli host noti e ne registra lo stato in uno storico:
+- Registra una riga **solo al cambio di stato** rispetto all'ultimo check
+  noto, o dopo un "battito" periodico (default 60 minuti anche senza
+  cambi) — limita la crescita della tabella pur permettendo di calcolare
+  un uptime% accurato
+- Girato da un thread interno dell'app (non un job one-shot: un ciclo
+  continuo), con intervallo/batch-size/battito configurabili da UI,
+  **attivo di default**
+- Uptime% ricostruito dagli intervalli fra check consecutivi (lo stato
+  "vale" fino al check successivo), non da un semplice conteggio di righe
+- Vista "Storico": una riga per host, **24 celle colorate** (una per ora
+  del giorno selezionato, 00:00-24:00) — verde se up in quell'ora, rosso se
+  down, grigio se non c'è ancora dato (nessun check registrato fino a quel
+  punto). Lo stato di ogni ora è quello dell'ultimo check noto entro la
+  fine dell'ora stessa ("riportato avanti" dall'ultimo cambio)
+
+### 8. Report PDF + notifiche
+
+- Genera un PDF (libreria pura Python, niente binari esterni) con sezioni
+  componibili: **riepilogo** (stat box, grafico a barre distribuzione tipo
+  dispositivo, top vulnerabilità per CVSS, esposizione MITRE ATT&CK per
+  tattica) ed **elenco host completo** (tabella con intestazione ripetuta
+  su ogni pagina)
+- Invio via **Telegram** (Bot API, `sendDocument`) e/o **Gmail** (SMTP con
+  App Password) — credenziali opzionali lette da file dedicati o variabili
+  d'ambiente, stesso pattern delle chiavi AI/NVD; senza configurazione,
+  l'app segnala chiaramente cosa manca in UI senza bloccare le altre
+  funzionalità
+- Generazione/invio manuali (bottone "Genera e scarica" / "Invia ora") più
+  una **schedulazione periodica** opzionale (6h/12h/24h/settimanale),
+  gestita da un thread interno separato da quello del monitoraggio
+
+### 9. Web UI (Flask + AdminLTE)
 
 - **Dashboard**: stat box (host totali, servizi aperti, tipi dispositivo
   distinti, batch scansione), stato scansione live (polling), grafico a
@@ -247,10 +326,13 @@ Orchestratore che:
   tutto client-side), filtri per tipo dispositivo/famiglia OS/sistema
   operativo dietro un bottone "Filtri" collassabile (non sempre visibili:
   con centinaia di host la UI deve restare pulita)
-- **Host** (dettaglio): tutte le info, editing inline del device_type
-  (badge + icona penna + input con datalist di suggerimenti + salva/
-  annulla via fetch), sotto-tipi/ruoli AI come badge separati, tabella
-  vulnerabilità note, tabella tecniche MITRE ATT&CK mappate con motivo
+- **Host** (dettaglio): tutte le info (incluso motivo/TTL della risposta
+  nmap, con la stima "base 255 ≈ 8 hop, probabile apparato di rete" quando
+  applicabile), editing inline del device_type (badge + icona penna + input
+  con datalist di suggerimenti + salva/annulla via fetch), sotto-tipi/ruoli
+  AI come badge separati, tabella vulnerabilità note, tabella tecniche
+  MITRE ATT&CK mappate con motivo, card storico raggiungibilità (fetch al
+  caricamento pagina)
 - **Servizi**: aggregato per porta/nome, drill-down su "quali host
   espongono questo servizio"
 - **Vulnerabilità**: DataTable con filtro CVSS minimo, colonna "Fonte"
@@ -262,21 +344,33 @@ Orchestratore che:
   host, colori per tipo dispositivo, legenda **collassabile e scrollabile
   con campo di ricerca** (con decine di tipi dispositivo diversi generati
   dall'AI, una legenda a chip inline diventa un muro di testo illeggibile)
-- **Matrice ATT&CK**: griglia CSS pura (colonne = tattiche, scroll
-  orizzontale, nessuna libreria matrice/grafo esterna), celle colorate per
-  numero di host esposti, click su una cella apre un modal con l'elenco
+- **Matrice ATT&CK**: pannelli collassabili per tattica (NON una griglia a
+  scroll orizzontale — scomoda con 15+ colonne su schermi normali), chip
+  colorati per numero di host esposti, click apre un modal con l'elenco
   host e il motivo della mappatura
-- **Operazioni**: **4 tab** (una per job: aggiorna scansione, classifica AI,
-  scansione vulnerabilità, matrice ATT&CK), ciascuna con descrizione,
-  controlli (checkbox `--force` dove rilevante, o il flag CLI equivalente
-  per quel job — es. `--update-matrix` per la matrice ATT&CK, non
-  "riclassificare" ha senso lì), bottone avvio + bottone **interrompi**,
-  badge di stato sulla linguetta stessa, log a piena larghezza/altezza (non
-  colonne strette affiancate)
+- **Monitoraggio**: stat box (up/down/mai controllati) + controlli
+  schedulazione (attivo/intervallo/batch/battito, bottone "esegui ora") +
+  due tab: **Stato attuale** (DataTable con stato/ultimo controllo/
+  uptime24h, click apre lo storico dettagliato in un modal) e **Storico**
+  (griglia a 24 celle per ora descritta sopra, con selettore data e
+  prev/next giorno, caricata via fetch solo al primo accesso alla tab)
+- **Amministrazione**: **6 tab**, una per ciascuna operazione automatizzabile
+  (discovery, aggiorna scansione, classifica AI, scansione vulnerabilità,
+  matrice ATT&CK, report), ciascuna con descrizione, controlli specifici
+  (form con BatchSize/OutputDir per discovery, checkbox `--force` o
+  equivalente per gli altri job), bottone avvio + bottone **interrompi**,
+  badge di stato sulla linguetta stessa, log a piena larghezza/altezza. La
+  tab "Report" include anche generazione/invio manuale PDF e configurazione
+  della schedulazione periodica
+- **Sidebar a menu/sottomenu**: raggruppa le voci in sezioni (Inventario:
+  Host/Servizi/Mappa; Monitoraggio; Sicurezza: Vulnerabilità/ATT&CK;
+  Sistema: Log/Amministrazione), ciascuna con icona propria; il sottomenu
+  della sezione attiva si apre da solo in base alla pagina corrente
 - **Log scansioni**: storico batch nmap
 
-Meccanismo comune per i job in background (`rescan`, `classify`, `vuln`,
-`attack`):
+Meccanismo comune per i job in background (`discovery`, `rescan`,
+`classify`, `vuln`, `attack` — **non** monitoraggio/report, che girano
+come thread continui, non job one-shot):
 - Ogni script scrive il proprio **PID in un file di lock** all'avvio (via
   context manager tipo `with JobLock(path): ...`) e lo rimuove alla fine
   (anche in caso di eccezione)
@@ -295,7 +389,7 @@ Meccanismo comune per i job in background (`rescan`, `classify`, `vuln`,
   di un job su più pagine diverse (dashboard, pagina dedicata, pagina del
   job stesso) senza duplicare la logica
 
-### 7. Aspetto
+### 10. Aspetto
 
 - Font **PT Sans Narrow** (Google Fonts) su tutta l'app
 - Toggle **tema chiaro/scuro** persistente (`localStorage`, classe
@@ -303,6 +397,60 @@ Meccanismo comune per i job in background (`rescan`, `classify`, `vuln`,
   render per evitare un flash del tema sbagliato
 - Controllo dimensione carattere (bottoni A-/A+, CSS custom property
   `--app-font-scale` su `<html>`, persistente)
+
+## Esecuzione in Docker
+
+L'app va resa containerizzabile senza portarsi dietro nmap nel container:
+
+- **Proxy nmap**: un piccolo server HTTP (`nmap_proxy_server.py`) gira
+  nativamente sull'host (dove nmap/Npcap funzionano), espone un endpoint
+  che riceve una lista di argomenti nmap e ritorna returncode/stdout/stderr
+  (base64, per sicurezza sull'encoding). Autenticato con un token condiviso
+  (header custom), bind su `0.0.0.0` per essere raggiungibile da un
+  container via `host.docker.internal`
+- **Client nmap unico** (`nmap_proxy_client.run_nmap(args, timeout, ...)`)
+  usato da ogni script che invoca nmap, al posto di
+  `subprocess.run(["nmap", ...])` diretto: se una variabile d'ambiente
+  "URL del proxy" non è impostata, esegue nmap in locale esattamente come
+  prima (**zero cambio di comportamento in uso nativo**); se impostata,
+  inoltra al proxy. Traduce due pattern di I/O su file usati nel resto del
+  codice, dato che in modalità proxy nmap gira su una macchina diversa dal
+  chiamante:
+  - `-oX <path>` (file reale) → richiesto al proxy come `-oX -` (stdout),
+    il contenuto ricevuto viene scritto dal client nel path locale originale
+  - `-iL <path>` → il client legge il file localmente e passa gli IP come
+    argomenti posizionali diretti (il path non esisterebbe sull'host proxy)
+  - Un timeout lato proxy deve propagarsi come la stessa eccezione che
+    `subprocess.run` solleverebbe nativamente, così il codice chiamante
+    (che la intercetta) non deve sapere in quale modalità sta girando
+- **Discovery**: la variante Python (vedi sezione 1) si usa automaticamente
+  quando il proxy è configurato, al posto dello script PowerShell
+- **Database Postgres**: quando containerizzata, il backend DB cambia da
+  SQLite a Postgres tramite una URL di connessione. Per non duplicare tutte
+  le query, un wrapper espone la stessa interfaccia usata per SQLite
+  (`conn.execute(sql, params)` con placeholder `?`, righe come dict
+  iterabili direttamente sul cursore, `.lastrowid` emulato con
+  `RETURNING id` automatico sulle tabelle che hanno quella colonna,
+  `.executescript` per il DDL multi-statement). Differenze di dialetto da
+  gestire: `LIKE`/`ILIKE` (Postgres case-sensitive di default),
+  `PRAGMA table_info`/`information_schema.columns` per l'introspezione
+  colonne, `INSERT OR IGNORE`→`ON CONFLICT DO NOTHING` (supportato da
+  entrambi), niente `datetime('now')` lato SQL (usa un timestamp Python
+  passato come parametro, le colonne sono TEXT su entrambi i backend)
+- **Importante**: all'avvio, l'app deve creare lo schema (`CREATE TABLE IF
+  NOT EXISTS`) **prima** di provare eventuali `ALTER TABLE` di migrazione —
+  su SQLite spesso non serve perché il file DB esiste già da run precedenti,
+  ma su un database Postgres appena creato (primo avvio del container) non
+  c'è ancora nessuna tabella, e l'app web è spesso il primo processo a
+  connettersi
+- **Dockerfile**: nmap non installato; server Flask in ascolto su
+  `0.0.0.0` (non `127.0.0.1`) e con debug/reloader disattivati, entrambi
+  controllabili da variabili d'ambiente per non cambiare i default in uso
+  nativo
+- **docker-compose**: due servizi (webapp + postgres), variabili
+  d'ambiente per le chiavi opzionali (AI/NVD/Telegram/Gmail/proxy nmap) via
+  un file `.env` non obbligatorio, `extra_hosts: host.docker.internal:host-gateway`
+  per la portabilità su Linux (Docker Desktop lo risolve già da solo)
 
 ## Insidie da evitare (scoperte debuggando)
 
@@ -336,3 +484,31 @@ Meccanismo comune per i job in background (`rescan`, `classify`, `vuln`,
   verificare se un'istanza precedente sia ancora viva, si accumulano
   processi doppi che competono sulla stessa porta — verifica sempre le
   porte/processi attivi prima di avviarne un altro
+- **File handle non chiuso sul log dei job**: se il file di log passato
+  come `stdout` a `subprocess.Popen` non viene esplicitamente chiuso nel
+  processo padre dopo l'avvio, il file resta bloccato (su Windows) o il
+  descrittore perde per ogni job avviato nella vita del processo Flask —
+  chiudilo subito dopo la `Popen` (il figlio ha già la sua copia duplicata)
+- **Schema non creato su un DB Postgres vergine**: se il codice di startup
+  fa solo `ALTER TABLE ... ADD COLUMN` (migrazioni "additive") assumendo che
+  le tabelle esistano già, funziona su SQLite (il file DB di solito esiste
+  già da run precedenti) ma fallisce con "relation does not exist" al primo
+  avvio contro un Postgres appena creato — chiama sempre prima `CREATE
+  TABLE IF NOT EXISTS`, poi le migrazioni additive
+- **Cursori DB non iterabili**: `sqlite3.Cursor` supporta l'iterazione
+  diretta (`for row in conn.execute(...)`), un cursore custom scritto per
+  wrappare un altro driver (es. psycopg2) deve implementare esplicitamente
+  `__iter__` o quel pattern (usato ovunque nel codice) si rompe con
+  `TypeError: object is not iterable`
+- **Ordine di lettura in una richiesta ping**: `reason_ttl` di uno
+  `<status reason="echo-reply">` va confrontato con i TTL di partenza tipici
+  (64/128/255) per stimare hop e tipo di sistema — un TTL osservato di
+  247 non significa "quasi morto", significa "partito da 255, attraversati
+  ~8 hop" (255 - 247), utile per dedurre un apparato di rete quando OS
+  match/porte non bastano
+- **Verifica sempre contro dati reali prima di fidarti di un'euristica
+  nuova**: prima di aggiungere una regola (es. IP che finisce per `.1` =
+  gateway, o baseline TTL) testala con dati/esempi concreti forniti
+  dall'utente o osservati dal vivo, non solo "sembra ragionevole" — in
+  questo progetto ogni euristica nuova (TTL, mappatura ATT&CK, ecc.) è
+  stata verificata con un caso reale prima di essere considerata affidabile

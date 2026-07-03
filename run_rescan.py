@@ -35,9 +35,10 @@ def main():
 
         print("== Avvio scan_and_store.py --resume (salta IP già scansionati) ==", flush=True)
         run([
+            # --db non passato: scan_and_store.py risolve da sé DATABASE_URL
+            # (Postgres, se il container la imposta) o il file SQLite di default.
             PY, str(BASE / "scan_and_store.py"),
             "--input", str(BASE / "up_ips.txt"),
-            "--db", str(BASE / "instance" / "inventory.db"),
             "--scans-dir", str(BASE / "scans"),
             "--resume",
         ])

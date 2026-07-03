@@ -69,6 +69,7 @@
   <div class="sidebar">
     <nav class="mt-2">
       {% set inventory_endpoints = ['hosts_list', 'host_detail', 'services_list', 'service_hosts', 'network_map'] %}
+      {% set monitoring_endpoints = ['monitoring'] %}
       {% set security_endpoints = ['vulnerabilities_list', 'attack_matrix'] %}
       {% set system_endpoints = ['scans_list', 'admin_panel'] %}
       <ul class="nav nav-pills nav-sidebar flex-column" data-widget="treeview" role="menu" data-accordion="false">
@@ -104,6 +105,24 @@
               <a href="{{ url_for('network_map') }}" class="nav-link {{ 'active' if request.endpoint == 'network_map' else '' }}">
                 <i class="nav-icon fas fa-sitemap"></i>
                 <p>Mappa di rete</p>
+              </a>
+            </li>
+          </ul>
+        </li>
+
+        <li class="nav-item {{ 'menu-open' if request.endpoint in monitoring_endpoints else '' }}">
+          <a href="#" class="nav-link {{ 'active' if request.endpoint in monitoring_endpoints else '' }}">
+            <i class="nav-icon fas fa-heart-pulse"></i>
+            <p>
+              Monitoraggio
+              <i class="right fas fa-angle-left"></i>
+            </p>
+          </a>
+          <ul class="nav nav-treeview">
+            <li class="nav-item">
+              <a href="{{ url_for('monitoring') }}" class="nav-link {{ 'active' if request.endpoint == 'monitoring' else '' }}">
+                <i class="nav-icon fas fa-satellite-dish"></i>
+                <p>Stato host</p>
               </a>
             </li>
           </ul>

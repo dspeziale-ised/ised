@@ -1,0 +1,32 @@
+.git/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Dati/DB nativi: nel container si usa Postgres (DATABASE_URL), non questi file
+instance/
+data/
+scans/
+scans_test/
+up_ips.txt
+
+# Log e stato runtime (rigenerati dal container)
+*.log
+*_log.txt
+*.lock
+
+# Segreti: mai nell'immagine, si passano come variabili d'ambiente del container
+.groq_api_key
+.gemini_api_key
+.ollama_api_key
+.nvd_api_key
+.telegram_bot_token
+.telegram_chat_id
+.gmail_address
+.gmail_app_password
+.gmail_to
+.nmap_proxy_token
+*.env
+
+docs/

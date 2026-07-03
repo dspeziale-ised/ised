@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ised}
+      POSTGRES_USER: ${POSTGRES_USER:-ised}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ised}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ised}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  webapp:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Chiavi AI/CVE/Telegram/Gmail/token del proxy nmap: vedi .env.example.
+    # env_file è opzionale, il file può anche non esistere (nessuna di
+    # queste funzionalità è obbligatoria per avviare l'app).
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ised}:${POSTGRES_PASSWORD:-ised}@postgres:5432/${POSTGRES_DB:-ised}
+    ports:
+      - "5200:5200"
+    extra_hosts:
+      # Necessario su Linux perché il container raggiunga nmap_proxy_server.py
+      # in esecuzione sull'host; su Docker Desktop (Windows/Mac) host.docker.internal
+      # è già risolto automaticamente, ma questa riga non causa problemi.
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  postgres_data:

@@ -8,7 +8,6 @@ per restare leggere e non intrusive.
 """
 
 import re
-import shutil
 import socket
 import ssl
 import subprocess
@@ -16,7 +15,8 @@ import urllib.error
 import urllib.request
 from xml.etree import ElementTree as ET
 
-NMAP_BIN = shutil.which("nmap") or "nmap"
+import nmap_proxy_client
+
 HTTP_PORTS = {80, 443, 8080, 8443, 8000, 8888, 10000, 10001, 5000, 5001}
 
 
@@ -75,9 +75,9 @@ def grab_tcp_banner(ip, port, timeout=3, probe=b""):
 def enum_smb_shares(ip, timeout=30):
     """Usa gli script NSE di nmap per enumerare condivisioni SMB e info SMB/OS."""
     try:
-        result = subprocess.run(
+        result = nmap_proxy_client.run_nmap(
             [
-                NMAP_BIN, "-Pn", "-p", "139,445",
+                "-Pn", "-p", "139,445",
                 "--script", "smb-enum-shares,smb-os-discovery",
                 "-oX", "-", ip,
             ],

@@ -1,0 +1,462 @@
+{% extends "base.html" %}
+{% block title %}Monitoraggio{% endblock %}
+{% block page_title %}Monitoraggio{% endblock %}
+{% block breadcrumb %}<li class="breadcrumb-item active">Monitoraggio</li>{% endblock %}
+
+{% block extra_css %}
+<style>
+  .status-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 4px;
+  }
+  .status-history-strip {
+    display: flex;
+    gap: 2px;
+    flex-wrap: wrap;
+    max-height: 160px;
+    overflow-y: auto;
+  }
+  .status-history-chip {
+    width: 14px;
+    height: 14px;
+    border-radius: 2px;
+  }
+  .hourly-table {
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+  .hourly-table th, .hourly-table td {
+    white-space: nowrap;
+  }
+  .hourly-led-cell {
+    padding: 2px !important;
+    text-align: center;
+  }
+  .hourly-led {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    background: #dee2e6;
+  }
+  .hourly-led.up { background: #28a745; }
+  .hourly-led.down { background: #dc3545; }
+  .hourly-hour-header {
+    font-size: .68rem;
+    color: #6c757d;
+    text-align: center;
+    font-weight: normal;
+  }
+  .hourly-ip-cell {
+    position: sticky;
+    left: 0;
+    background: #fff;
+    z-index: 1;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row">
+  <div class="col-lg-3 col-6">
+    <div class="small-box bg-secondary">
+      <div class="inner">
+        <h3 id="statTotal">{{ summary.total_hosts }}</h3>
+        <p>Host monitorati</p>
+      </div>
+      <div class="icon"><i class="fas fa-desktop"></i></div>
+    </div>
+  </div>
+  <div class="col-lg-3 col-6">
+    <div class="small-box bg-success">
+      <div class="inner">
+        <h3 id="statUp">{{ summary.up }}</h3>
+        <p>Attivi (up)</p>
+      </div>
+      <div class="icon"><i class="fas fa-signal"></i></div>
+    </div>
+  </div>
+  <div class="col-lg-3 col-6">
+    <div class="small-box bg-danger">
+      <div class="inner">
+        <h3 id="statDown">{{ summary.down }}</h3>
+        <p>Non raggiungibili (down)</p>
+      </div>
+      <div class="icon"><i class="fas fa-triangle-exclamation"></i></div>
+    </div>
+  </div>
+  <div class="col-lg-3 col-6">
+    <div class="small-box bg-warning">
+      <div class="inner">
+        <h3 id="statUnknown">{{ summary.never_checked }}</h3>
+        <p>Mai controllati</p>
+      </div>
+      <div class="icon"><i class="fas fa-question"></i></div>
+    </div>
+  </div>
+</div>
+
+<div class="card card-outline card-primary">
+  <div class="card-header">
+    <h3 class="card-title"><i class="fas fa-satellite-dish"></i> Ciclo di monitoraggio</h3>
+  </div>
+  <div class="card-body">
+    <p class="small text-muted">
+      Un ciclo di controllo esegue un ping-sweep (<code>nmap -sn</code>, a batch) su tutti gli host
+      noti e registra lo stato in uno storico (solo al cambio di stato o dopo un "battito"
+      periodico, per contenere la crescita dei dati).
+    </p>
+    <div class="form-row align-items-end mb-2">
+      <div class="col-auto">
+        <div class="form-check mb-1">
+          <input type="checkbox" class="form-check-input" id="monitorEnabled" {{ 'checked' if monitor_config.enabled else '' }}>
+          <label class="form-check-label small" for="monitorEnabled">Monitoraggio automatico attivo</label>
+        </div>
+      </div>
+      <div class="col-auto">
+        <label class="small text-muted mb-1">Ogni (minuti)</label>
+        <select id="monitorIntervalMinutes" class="form-control form-control-sm">
+          <option value="1" {{ 'selected' if monitor_config.interval_minutes == 1 else '' }}>1</option>
+          <option value="5" {{ 'selected' if monitor_config.interval_minutes == 5 else '' }}>5</option>
+          <option value="10" {{ 'selected' if monitor_config.interval_minutes == 10 else '' }}>10</option>
+          <option value="15" {{ 'selected' if monitor_config.interval_minutes == 15 else '' }}>15</option>
+          <option value="30" {{ 'selected' if monitor_config.interval_minutes == 30 else '' }}>30</option>
+          <option value="60" {{ 'selected' if monitor_config.interval_minutes == 60 else '' }}>60</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <label class="small text-muted mb-1">Host per batch nmap</label>
+        <input type="number" min="1" max="500" class="form-control form-control-sm" id="monitorBatchSize" value="{{ monitor_config.batch_size }}">
+      </div>
+      <div class="col-auto">
+        <label class="small text-muted mb-1">Battito periodico (min)</label>
+        <input type="number" min="5" max="1440" class="form-control form-control-sm" id="monitorHeartbeatMinutes" value="{{ monitor_config.heartbeat_minutes }}">
+      </div>
+      <div class="col-auto">
+        <button id="monitorSaveBtn" type="button" class="btn btn-outline-success btn-sm">
+          <i class="fas fa-save"></i> Salva
+        </button>
+      </div>
+      <div class="col-auto">
+        <button id="monitorRunNowBtn" type="button" class="btn btn-primary btn-sm">
+          <i class="fas fa-play"></i> Esegui ora
+        </button>
+      </div>
+    </div>
+    <div id="monitorActionResult" class="small mb-1"></div>
+    <p class="small text-muted mb-0">
+      Ultimo ciclo:
+      <strong id="monitorLastRun">{{ monitor_config.last_run_at or 'mai' }}</strong>
+      {% if monitor_config.last_run_summary %}
+      &mdash; {{ monitor_config.last_run_summary.up }} up, {{ monitor_config.last_run_summary.down }} down
+      su {{ monitor_config.last_run_summary.total }} host
+      {% endif %}
+      &mdash; controllato ogni 30 secondi da un thread interno dell'applicazione (deve restare in
+      esecuzione perché il monitoraggio automatico funzioni).
+    </p>
+  </div>
+</div>
+
+<div class="card card-outline card-secondary">
+  <div class="card-header p-0 border-bottom-0">
+    <ul class="nav nav-tabs" id="monTabs" role="tablist">
+      <li class="nav-item">
+        <a class="nav-link active" id="tab-current-btn" data-toggle="tab" href="#tab-current" role="tab">
+          <i class="fas fa-list"></i> Stato attuale
+        </a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link" id="tab-storico-btn" data-toggle="tab" href="#tab-storico" role="tab">
+          <i class="fas fa-calendar-day"></i> Storico
+        </a>
+      </li>
+    </ul>
+  </div>
+  <div class="card-body">
+    <div class="tab-content" id="monTabsContent">
+
+      <div class="tab-pane fade show active" id="tab-current" role="tabpanel">
+        <div class="text-right mb-2">
+          <select id="filterStatus" class="form-control form-control-sm d-inline-block" style="width:auto;">
+            <option value="">Tutti gli stati</option>
+            <option value="up">Solo up</option>
+            <option value="down">Solo down</option>
+            <option value="unknown">Mai controllati</option>
+          </select>
+        </div>
+        <table id="monitoringTable" class="table table-striped table-bordered table-sm" style="width:100%">
+          <thead>
+            <tr>
+              <th>IP</th>
+              <th>Tipo dispositivo</th>
+              <th>Stato</th>
+              <th>Ultimo controllo</th>
+              <th>Uptime 24h</th>
+            </tr>
+          </thead>
+        </table>
+      </div>
+
+      <div class="tab-pane fade" id="tab-storico" role="tabpanel">
+        <p class="small text-muted">
+          Una riga per host, 24 celle (una per ora, 00:00&ndash;24:00) colorate in base allo stato
+          conosciuto in quell'ora: <span class="hourly-led up"></span> up,
+          <span class="hourly-led down"></span> down, <span class="hourly-led"></span> nessun dato.
+        </p>
+        <div class="form-row align-items-end mb-2">
+          <div class="col-auto">
+            <button id="hourlyPrevDayBtn" type="button" class="btn btn-outline-secondary btn-sm">
+              <i class="fas fa-chevron-left"></i>
+            </button>
+          </div>
+          <div class="col-auto">
+            <input type="date" id="hourlyDateInput" class="form-control form-control-sm">
+          </div>
+          <div class="col-auto">
+            <button id="hourlyNextDayBtn" type="button" class="btn btn-outline-secondary btn-sm">
+              <i class="fas fa-chevron-right"></i>
+            </button>
+          </div>
+          <div class="col-auto">
+            <button id="hourlyTodayBtn" type="button" class="btn btn-outline-primary btn-sm">Oggi</button>
+          </div>
+          <div class="col-md-3 ml-auto">
+            <input type="text" id="hourlySearch" class="form-control form-control-sm" placeholder="Cerca IP o tipo dispositivo...">
+          </div>
+        </div>
+        <div id="hourlyLoading" class="text-muted"><i class="fas fa-spinner fa-spin"></i> Caricamento...</div>
+        <div style="overflow-x:auto;">
+          <table id="hourlyTable" class="table table-sm hourly-table" style="display:none;">
+            <thead>
+              <tr>
+                <th class="hourly-ip-cell">Host</th>
+                {% for h in range(24) %}
+                <th class="hourly-hour-header">{{ '%02d' % h }}</th>
+                {% endfor %}
+              </tr>
+            </thead>
+            <tbody id="hourlyTableBody"></tbody>
+          </table>
+        </div>
+        <div id="hourlyNoResults" class="text-muted small" style="display:none;">Nessun host corrisponde alla ricerca.</div>
+      </div>
+
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<div class="modal fade" id="historyModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="historyModalTitle">&nbsp;</h5>
+        <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+      </div>
+      <div class="modal-body">
+        <p class="small text-muted mb-1">
+          Uptime 24h: <strong id="historyUptime24h">&mdash;</strong> &middot;
+          Uptime 7gg: <strong id="historyUptime7d">&mdash;</strong>
+        </p>
+        <div id="historyStrip" class="status-history-strip mb-2"></div>
+        <table class="table table-sm table-striped">
+          <thead><tr><th>Stato</th><th>Rilevato il</th></tr></thead>
+          <tbody id="historyTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const STATUS_BADGE_CLASS = { up: 'success', down: 'danger', unknown: 'secondary' };
+const STATUS_LABEL_TEXT = { up: 'up', down: 'down', unknown: 'mai controllato' };
+
+$(function () {
+  const table = $('#monitoringTable').DataTable({
+    processing: true,
+    serverSide: true,
+    order: [[0, 'asc']],
+    pageLength: 25,
+    language: DT_LANG_IT,
+    ajax: {
+      url: "{{ url_for('api_monitoring') }}",
+      data: function (d) { d.status = $('#filterStatus').val(); }
+    },
+    columns: [
+      { data: null, render: (row) => `<a href="${row.ip_url}">${row.ip}</a>` },
+      { data: null, render: (row) => `<span class="badge badge-${row.device_badge}">${row.device_type}</span>` },
+      { data: null, render: (row) =>
+          `<span class="status-dot bg-${STATUS_BADGE_CLASS[row.status]}"></span>` +
+          `<a href="#" class="show-history" data-ip="${row.ip}">${STATUS_LABEL_TEXT[row.status]}</a>`
+      },
+      { data: null, render: (row) => row.checked_at ? `<small>${row.checked_at}</small>` : '<span class="text-muted">&mdash;</span>' },
+      { data: null, render: (row) => row.uptime_24h !== null && row.uptime_24h !== undefined ? `${row.uptime_24h}%` : '<span class="text-muted">&mdash;</span>' },
+    ]
+  });
+
+  $('#filterStatus').on('change', () => table.ajax.reload());
+
+  $('#monitoringTable').on('click', '.show-history', function (e) {
+    e.preventDefault();
+    const ip = $(this).data('ip');
+    fetch(`/api/monitoring/host/${encodeURIComponent(ip)}/history`)
+      .then(r => r.json())
+      .then(d => {
+        document.getElementById('historyModalTitle').textContent = 'Storico raggiungibilità - ' + ip;
+        document.getElementById('historyUptime24h').textContent = d.uptime_24h !== null ? d.uptime_24h + '%' : 'n/d';
+        document.getElementById('historyUptime7d').textContent = d.uptime_7d !== null ? d.uptime_7d + '%' : 'n/d';
+
+        const strip = document.getElementById('historyStrip');
+        strip.innerHTML = '';
+        d.history.slice().reverse().forEach(h => {
+          const chip = document.createElement('div');
+          chip.className = 'status-history-chip bg-' + (h.status === 'up' ? 'success' : 'danger');
+          chip.title = `${h.status} - ${h.checked_at}`;
+          strip.appendChild(chip);
+        });
+
+        const tbody = document.getElementById('historyTableBody');
+        tbody.innerHTML = '';
+        if (!d.history.length) {
+          tbody.innerHTML = '<tr><td colspan="2" class="text-muted">Nessuno storico disponibile ancora.</td></tr>';
+        } else {
+          d.history.forEach(h => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td><span class="badge badge-${h.status === 'up' ? 'success' : 'danger'}">${h.status}</span></td><td><small>${h.checked_at}</small></td>`;
+            tbody.appendChild(tr);
+          });
+        }
+        $('#historyModal').modal('show');
+      });
+  });
+});
+
+document.getElementById('monitorSaveBtn').addEventListener('click', function () {
+  const btn = this;
+  btn.disabled = true;
+  const body = new URLSearchParams();
+  if (document.getElementById('monitorEnabled').checked) body.set('enabled', '1');
+  body.set('interval_minutes', document.getElementById('monitorIntervalMinutes').value);
+  body.set('batch_size', document.getElementById('monitorBatchSize').value);
+  body.set('heartbeat_minutes', document.getElementById('monitorHeartbeatMinutes').value);
+  fetch("{{ url_for('api_monitor_schedule') }}", { method: 'POST', body: body })
+    .then(r => r.json())
+    .then(() => {
+      document.getElementById('monitorActionResult').innerHTML = '<span class="text-success"><i class="fas fa-check"></i> Salvato.</span>';
+    })
+    .catch(() => {
+      document.getElementById('monitorActionResult').innerHTML = '<span class="text-danger">Errore di rete.</span>';
+    })
+    .finally(() => { btn.disabled = false; });
+});
+
+document.getElementById('monitorRunNowBtn').addEventListener('click', function () {
+  const btn = this;
+  btn.disabled = true;
+  const resultEl = document.getElementById('monitorActionResult');
+  resultEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Ciclo di monitoraggio in corso...';
+  fetch("{{ url_for('monitoring_run_now') }}", { method: 'POST' })
+    .then(r => r.json())
+    .then(d => {
+      const s = d.summary;
+      resultEl.innerHTML = `<span class="text-success"><i class="fas fa-check"></i> Completato: ${s.up} up, ${s.down} down su ${s.total} host.</span>`;
+      document.getElementById('statUp').textContent = s.up;
+      document.getElementById('statDown').textContent = s.down;
+      $('#monitoringTable').DataTable().ajax.reload(null, false);
+    })
+    .catch(() => { resultEl.innerHTML = '<span class="text-danger">Errore di rete.</span>'; })
+    .finally(() => { btn.disabled = false; });
+});
+
+// --- Tab Storico: griglia a 24 led per host ---
+(function () {
+  const dateInput = document.getElementById('hourlyDateInput');
+  const tableEl = document.getElementById('hourlyTable');
+  const bodyEl = document.getElementById('hourlyTableBody');
+  const loadingEl = document.getElementById('hourlyLoading');
+  const noResultsEl = document.getElementById('hourlyNoResults');
+  const searchEl = document.getElementById('hourlySearch');
+  let hourlyData = [];
+  let loadedOnce = false;
+
+  function todayIso() {
+    const d = new Date();
+    const tz = d.getTimezoneOffset() * 60000;
+    return new Date(d - tz).toISOString().slice(0, 10);
+  }
+  dateInput.value = todayIso();
+
+  function renderRows() {
+    const query = (searchEl.value || '').trim().toLowerCase();
+    bodyEl.innerHTML = '';
+    let shown = 0;
+    hourlyData.forEach(host => {
+      if (query && !host.ip.toLowerCase().includes(query) && !host.device_type.toLowerCase().includes(query)) {
+        return;
+      }
+      shown++;
+      const tr = document.createElement('tr');
+      const ledCells = host.hours.map(status => {
+        const cls = status === 'up' ? 'up' : (status === 'down' ? 'down' : '');
+        return `<td class="hourly-led-cell"><span class="hourly-led ${cls}"></span></td>`;
+      }).join('');
+      tr.innerHTML =
+        `<td class="hourly-ip-cell"><a href="${host.ip_url}">${host.ip}</a> ` +
+        `<span class="badge badge-${host.device_badge}">${host.device_type}</span></td>` +
+        ledCells;
+      bodyEl.appendChild(tr);
+    });
+    noResultsEl.style.display = shown === 0 ? 'block' : 'none';
+    tableEl.style.display = shown === 0 ? 'none' : 'table';
+  }
+
+  function loadHourly() {
+    loadingEl.style.display = 'block';
+    tableEl.style.display = 'none';
+    noResultsEl.style.display = 'none';
+    fetch("{{ url_for('api_monitoring_hourly') }}?date=" + encodeURIComponent(dateInput.value))
+      .then(r => r.json())
+      .then(d => {
+        hourlyData = d.hosts || [];
+        loadingEl.style.display = 'none';
+        renderRows();
+      })
+      .catch(() => {
+        loadingEl.innerHTML = '<span class="text-danger">Errore nel caricamento dello storico.</span>';
+      });
+  }
+
+  document.getElementById('tab-storico-btn').addEventListener('shown.bs.tab', function () {
+    if (!loadedOnce) { loadedOnce = true; loadHourly(); }
+  });
+  // Fallback per versioni Bootstrap/jQuery dove l'evento sopra non scatta con data-toggle="tab".
+  $('#tab-storico-btn').on('shown.bs.tab', function () {
+    if (!loadedOnce) { loadedOnce = true; loadHourly(); }
+  });
+
+  dateInput.addEventListener('change', loadHourly);
+  searchEl.addEventListener('input', renderRows);
+  document.getElementById('hourlyTodayBtn').addEventListener('click', function () {
+    dateInput.value = todayIso();
+    loadHourly();
+  });
+  document.getElementById('hourlyPrevDayBtn').addEventListener('click', function () {
+    const d = new Date(dateInput.value + 'T00:00:00');
+    d.setDate(d.getDate() - 1);
+    dateInput.value = d.toISOString().slice(0, 10);
+    loadHourly();
+  });
+  document.getElementById('hourlyNextDayBtn').addEventListener('click', function () {
+    const d = new Date(dateInput.value + 'T00:00:00');
+    d.setDate(d.getDate() + 1);
+    dateInput.value = d.toISOString().slice(0, 10);
+    loadHourly();
+  });
+})();
+</script>
+{% endblock %}

@@ -7,18 +7,16 @@ Uso tipico:
 """
 
 import argparse
-import shutil
 import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import nmap_proxy_client
 import scanner_db
 from classify import classify_device
 from nmap_parser import parse_nmap_xml
-
-NMAP_BIN = shutil.which("nmap") or "nmap"
 
 
 def now_iso():
@@ -40,8 +38,11 @@ def chunk(items, size):
 
 
 def build_command(ip_list_file, xml_out, args):
+    """Ritorna gli argomenti nmap SENZA il nome del binario: sia
+    nmap_proxy_client in modalità nativa (che lo aggiunge da sé) sia in
+    modalità proxy (dove il binario è risolto sull'host remoto) si
+    aspettano solo gli argomenti."""
     cmd = [
-        NMAP_BIN,
         "-sV", "-Pn",
         "-T" + args.timing,
         "--top-ports", str(args.top_ports),
@@ -75,10 +76,7 @@ def run_batch(batch_ips, batch_idx, args, conn):
 
     status = "ok"
     try:
-        subprocess.run(
-            cmd, capture_output=True, text=True,
-            timeout=args.batch_timeout, check=False,
-        )
+        nmap_proxy_client.run_nmap(cmd, capture_output=True, text=True, timeout=args.batch_timeout)
     except subprocess.TimeoutExpired:
         status = "timeout"
         print(f"[batch {batch_idx}] timeout dopo {args.batch_timeout}s, "
@@ -94,7 +92,9 @@ def run_batch(batch_ips, batch_idx, args, conn):
         if host["state"] != "up":
             continue
         up_hosts += 1
-        device_type, device_vendor = classify_device(host["os_matches"], host["services"])
+        device_type, device_vendor = classify_device(
+            host["os_matches"], host["services"], ip=host["ip"], ttl=host.get("ttl")
+        )
         host["device_type"] = device_type
         host["device_vendor"] = device_vendor
         host["last_scanned"] = finished
@@ -102,7 +102,7 @@ def run_batch(batch_ips, batch_idx, args, conn):
         scanner_db.upsert_host(conn, host)
 
     scanner_db.log_scan(
-        conn, started, finished, len(batch_ips), str(xml_out), " ".join(cmd), status
+        conn, started, finished, len(batch_ips), str(xml_out), "nmap " + " ".join(cmd), status
     )
     conn.commit()
 
@@ -113,7 +113,10 @@ def run_batch(batch_ips, batch_idx, args, conn):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", default="up_ips.txt", help="File con un IP per riga")
-    parser.add_argument("--db", default="instance/inventory.db", help="Percorso database SQLite")
+    parser.add_argument(
+        "--db", default=scanner_db.resolve_db_target(Path(__file__).parent / "instance" / "inventory.db"),
+        help="Percorso database SQLite, oppure URL postgresql://... (default: DATABASE_URL se impostata)",
+    )
     parser.add_argument("--scans-dir", default="scans", help="Cartella per gli XML grezzi")
     parser.add_argument("--batch-size", type=int, default=32, help="Host per batch nmap")
     parser.add_argument("--top-ports", type=int, default=200, help="Numero porte da scansionare")

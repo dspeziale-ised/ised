@@ -9,6 +9,19 @@
 {% block content %}
 <div class="row">
   <div class="col-md-4">
+    <div class="card card-outline card-info">
+      <div class="card-header">
+        <h3 class="card-title"><i class="fas fa-heart-pulse"></i> Monitoraggio</h3>
+        <div class="card-tools">
+          <a href="{{ url_for('monitoring') }}" class="btn btn-sm btn-outline-secondary">
+            <i class="fas fa-satellite-dish"></i> Vai a Monitoraggio
+          </a>
+        </div>
+      </div>
+      <div class="card-body" id="monitorCardBody">
+        <span class="text-muted"><i class="fas fa-spinner fa-spin"></i> Caricamento...</span>
+      </div>
+    </div>
     {% if host.ai_device_type %}
     <div class="card card-outline card-success">
       <div class="card-header">
@@ -84,6 +97,24 @@
           <tr><th>MAC</th><td>{{ host.mac_address or '&mdash;' | safe }}</td></tr>
           <tr><th>Vendor MAC</th><td>{{ host.mac_vendor or '&mdash;' | safe }}</td></tr>
           <tr><th>Distanza (hop)</th><td>{{ host.distance if host.distance is not none else '&mdash;' | safe }}</td></tr>
+          <tr>
+            <th>Motivo stato (ping)</th>
+            <td>{{ host.status_reason or '&mdash;' | safe }}</td>
+          </tr>
+          <tr>
+            <th>TTL risposta</th>
+            <td>
+              {% if host.ttl %}
+                {{ host.ttl }}
+                <small class="text-muted">
+                  (base stimata {{ ttl_baseline }}, ~{{ ttl_hops }} hop
+                  {%- if ttl_baseline == 255 %} &mdash; probabile apparato di rete{% endif %})
+                </small>
+              {% else %}
+                &mdash;
+              {% endif %}
+            </td>
+          </tr>
           <tr><th>Timeout durante scan</th><td>{{ 'Sì' if host.timed_out else 'No' }}</td></tr>
           <tr><th>Ultima scansione</th><td>{{ host.last_scanned or '&mdash;' | safe }}</td></tr>
           <tr><th>Durata scan (s)</th><td>{{ host.scan_duration if host.scan_duration is not none else '&mdash;' | safe }}</td></tr>
@@ -226,6 +257,29 @@
 
 {% block extra_js %}
 <script>
+fetch("{{ url_for('api_monitoring_host_history', ip=host.ip) }}")
+  .then(r => r.json())
+  .then(d => {
+    const body = document.getElementById('monitorCardBody');
+    if (!d.history.length) {
+      body.innerHTML = '<span class="text-muted">Nessuno storico ancora disponibile (il monitoraggio non ha ancora controllato questo host).</span>';
+      return;
+    }
+    const latest = d.history[0];
+    const badgeClass = latest.status === 'up' ? 'success' : 'danger';
+    const strip = d.history.slice(0, 40).slice().reverse().map(h =>
+      `<span title="${h.status} - ${h.checked_at}" style="display:inline-block;width:10px;height:10px;margin-right:2px;border-radius:2px;background:${h.status === 'up' ? '#28a745' : '#dc3545'}"></span>`
+    ).join('');
+    body.innerHTML =
+      `<p class="mb-1"><span class="badge badge-${badgeClass}">${latest.status}</span> <small class="text-muted">dal ${latest.checked_at}</small></p>` +
+      `<p class="small mb-1">Uptime 24h: <strong>${d.uptime_24h !== null ? d.uptime_24h + '%' : 'n/d'}</strong> &middot; ` +
+      `7gg: <strong>${d.uptime_7d !== null ? d.uptime_7d + '%' : 'n/d'}</strong></p>` +
+      `<div>${strip}</div>`;
+  })
+  .catch(() => {
+    document.getElementById('monitorCardBody').innerHTML = '<span class="text-danger">Errore nel caricamento dello storico.</span>';
+  });
+
 $(function () {
   const view = document.getElementById('deviceTypeView');
   const edit = document.getElementById('deviceTypeEdit');
