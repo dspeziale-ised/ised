@@ -11,6 +11,17 @@ tecnica di scansione, porte, versione/OS, script NSE, timing, evasione),
 ma resta comunque possibile passare argomenti extra a mano per qualunque
 flag non coperto esplicitamente dal form.
 
+Se il target si espande in più di un host (CIDR, range, lista), la
+scansione viene eseguita a BATCH invece che in un'unica invocazione nmap:
+ogni batch è un'invocazione nmap indipendente che completa e registra i
+propri risultati/traffico (vedi scan_pipeline.run_and_store) in pochi
+minuti anziché alla fine dell'intero target — nmap non espone alcun
+contatore di pacchetti/byte "in diretta" durante una singola invocazione
+(la riga "Raw packets sent" viene stampata solo al termine), quindi questo
+è l'unico modo per dare un riscontro progressivo su una scansione lunga
+(es. un intero /24 con timing basso/--max-rate) invece che vederla come
+un'unica attesa senza nessun dato fino alla fine.
+
 Uso:
     python custom_scan.py --target "10.1.26.0/24" --args "-sS -sV -O -T4 --top-ports 200"
     python custom_scan.py --target "10.1.26.5 10.1.26.6" --args "-p 22,80,443 -sV"
@@ -19,8 +30,11 @@ Uso:
 import argparse
 import shlex
 import sys
+import tempfile
 from pathlib import Path
 
+import nmap_parser
+import nmap_proxy_client
 import scan_pipeline
 import scanner_db
 from job_lock import JobLock

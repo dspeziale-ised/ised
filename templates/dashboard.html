@@ -44,14 +44,28 @@
     </h3>
     <div class="card-tools">
       <span class="badge badge-secondary mr-1" id="trafficSentBadge">Inviati: —</span>
-      <span class="badge badge-secondary" id="trafficRcvdBadge">Ricevuti: —</span>
+      <span class="badge badge-secondary mr-1" id="trafficRcvdBadge">Ricevuti: —</span>
+      <span class="badge badge-secondary mr-1" id="connOutBadge">Connessioni uscita: —</span>
+      <span class="badge badge-secondary" id="connInBadge">Connessioni entrata: —</span>
     </div>
   </div>
   <div class="card-body py-2">
-    <canvas id="trafficChart" style="max-height:130px"></canvas>
+    <div class="row">
+      <div class="col-md-8">
+        <canvas id="trafficChart" style="max-height:130px"></canvas>
+      </div>
+      <div class="col-md-4">
+        <canvas id="connChart" style="max-height:130px"></canvas>
+      </div>
+    </div>
     <p class="small text-muted mb-0 mt-1">
-      Byte/pacchetti al secondo generati dalle scansioni nmap dell'app (non tutto il traffico della
-      workstation), ultimi 60 minuti raggruppati in bucket da 2 minuti.
+      Byte/pacchetti/connessioni al secondo generati dalle scansioni nmap dell'app (non tutto il
+      traffico della workstation), ultimi 60 minuti raggruppati in bucket da 2 minuti.
+      <strong>Le connessioni sono quasi sempre 0 per Discovery/Aggiorna scansione/Monitoraggio</strong>:
+      usano la tecnica -sS (SYN scan), che non crea socket di sistema osservabili — solo una
+      Scansione nmap personalizzata con tecnica -sT (TCP connect) esplicita può valorizzarle
+      (a sua volta con -sT nmap non riporta più byte/pacchetti, le due metriche sono alternative
+      a seconda della tecnica scelta, mai disponibili insieme sulla stessa scansione).
     </p>
   </div>
 </div>
@@ -366,6 +380,23 @@ const trafficChart = new Chart(document.getElementById('trafficChart'), {
   },
 });
 
+const connChart = new Chart(document.getElementById('connChart'), {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      { label: 'Connessioni/sec uscita', data: [], borderColor: '#f28e2b', backgroundColor: 'rgba(242,142,43,0.15)', tension: 0.3, fill: true, pointRadius: 0 },
+      { label: 'Connessioni/sec entrata', data: [], borderColor: '#59a14f', backgroundColor: 'rgba(89,161,79,0.15)', tension: 0.3, fill: true, pointRadius: 0 },
+    ],
+  },
+  options: {
+    animation: false,
+    maintainAspectRatio: false,
+    scales: { y: { beginAtZero: true } },
+    plugins: { legend: { position: 'bottom', labels: { boxHeight: 8 } } },
+  },
+});
+
 function refreshTrafficStats() {
   fetch('{{ url_for("api_traffic_stats") }}?since_minutes=60&bucket_minutes=2')
     .then((r) => r.json())
@@ -374,12 +405,23 @@ function refreshTrafficStats() {
         `Inviati: ${d.total.packets_sent.toLocaleString('it-IT')} pacchetti · ${formatBytes(d.total.bytes_sent)}`;
       document.getElementById('trafficRcvdBadge').textContent =
         `Ricevuti: ${d.total.packets_rcvd.toLocaleString('it-IT')} pacchetti · ${formatBytes(d.total.bytes_rcvd)}`;
+      document.getElementById('connOutBadge').textContent =
+        `Connessioni uscita: ${d.total.connections_out.toLocaleString('it-IT')}`;
+      document.getElementById('connInBadge').textContent =
+        `Connessioni entrata: ${d.total.connections_in.toLocaleString('it-IT')}`;
 
       const bucketSeconds = d.bucket_minutes * 60;
-      trafficChart.data.labels = d.series.map((b) => b.t.slice(11, 16));
+      const labels = d.series.map((b) => b.t.slice(11, 16));
+
+      trafficChart.data.labels = labels;
       trafficChart.data.datasets[0].data = d.series.map((b) => Math.round(b.bytes_sent / bucketSeconds));
       trafficChart.data.datasets[1].data = d.series.map((b) => Math.round(b.bytes_rcvd / bucketSeconds));
       trafficChart.update();
+
+      connChart.data.labels = labels;
+      connChart.data.datasets[0].data = d.series.map((b) => Math.round((b.connections_out / bucketSeconds) * 100) / 100);
+      connChart.data.datasets[1].data = d.series.map((b) => Math.round((b.connections_in / bucketSeconds) * 100) / 100);
+      connChart.update();
     })
     .catch(() => {});
 }

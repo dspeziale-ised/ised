@@ -5,13 +5,25 @@ pacchetti/byte totali via -v, vedi nmap_proxy_client.parse_traffic_stats),
 quindi l'unico modo per stimarlo è osservare i socket del suo processo
 dall'esterno mentre gira.
 
-APPROSSIMATO PER DIFETTO: un poll ogni ~100ms non cattura connessioni più
-brevi dell'intervallo — tipico delle scansioni SYN (-sS, il default di
-nmap con privilegi), che aprono e chiudono un socket per pochi
-millisecondi. Utile come indicatore approssimativo dell'attività di rete
-generata, non come conteggio esatto (richiesto esplicitamente così
-nonostante il limite, invece di derivarlo — con precisione esatta ma
-un significato diverso — dalle porte scansionate/aperte nell'XML nmap).
+LIMITE STRUTTURALE VERIFICATO (non solo un problema di campionamento): con
+-sS (SYN scan, la tecnica di DEFAULT usata da discovery/rescan/monitor in
+questo progetto) nmap costruisce i pacchetti grezzi da sé via raw
+socket/Npcap, SENZA mai passare dalle connect() del sistema operativo — di
+conseguenza non esiste alcun socket nella tabella connessioni del SO che
+psutil possa osservare, e connections_out/connections_in risultano SEMPRE
+0, indipendentemente dalla frequenza di polling. Solo con -sT (TCP connect
+scan, che usa connect() reali) i socket sono osservabili — ma con -sT nmap
+NON stampa affatto la riga "Raw packets sent" usata per bytes/pacchetti
+(verificato): le due metriche (bytes/pacchetti vs connessioni) sono quindi
+alternative a seconda della tecnica scelta, mai disponibili insieme sulla
+stessa scansione. In pratica: bytes/pacchetti funzionano sempre (tecnica di
+default -sS), le connessioni sono valorizzate solo scegliendo -sT
+esplicitamente nella Scansione nmap personalizzata.
+
+Anche con -sT, il campionamento resta approssimato per difetto: un poll
+ogni ~100ms può non catturare connessioni più brevi dell'intervallo
+(tipico su host a bassa latenza, dove l'intero ciclo connect/risposta/
+chiusura dura pochi millisecondi).
 
 Richiede psutil; se non installato o senza permessi sufficienti per
 ispezionare il processo, ritorna sempre 0 invece di far fallire la
