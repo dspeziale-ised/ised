@@ -22,6 +22,21 @@
   </div>
 </div>
 
+<div class="card card-outline card-info mb-3">
+  <div class="card-body py-2 d-flex align-items-center flex-wrap">
+    <span class="mr-3"><i class="fas fa-spinner"></i> <strong>Scansioni in corso:</strong></span>
+    <span class="mr-3 text-nowrap">Discovery <span class="badge job-status-badge ml-1" data-job="discovery"></span></span>
+    <span class="mr-3 text-nowrap">Aggiorna scansione <span class="badge job-status-badge ml-1" data-job="rescan"></span></span>
+    <span class="mr-3 text-nowrap">Classificazione AI <span class="badge job-status-badge ml-1" data-job="classify"></span></span>
+    <span class="mr-3 text-nowrap">Vulnerabilità <span class="badge job-status-badge ml-1" data-job="vuln"></span></span>
+    <span class="mr-3 text-nowrap">MITRE ATT&amp;CK <span class="badge job-status-badge ml-1" data-job="attack"></span></span>
+    <span class="mr-3 text-nowrap">Scansione nmap <span class="badge job-status-badge ml-1" data-job="customscan"></span></span>
+    <a href="{{ url_for('scans_list') }}" class="btn btn-sm btn-outline-secondary ml-auto">
+      <i class="fas fa-history"></i> Log scansioni
+    </a>
+  </div>
+</div>
+
 <div class="row">
   <div class="col-lg-3 col-6">
     <div class="small-box bg-info">
@@ -307,7 +322,7 @@ refreshScanStatus();
 setInterval(refreshScanStatus, 5000);
 
 {% include "_jobs_script.html" %}
-initJobWidgets({ discovery: {}, rescan: {}, classify: {}, vuln: {} });
+initJobWidgets({ discovery: {}, rescan: {}, classify: {}, vuln: {}, attack: {}, customscan: {} });
 
 {% include "_effort_script.html" %}
 </script>

@@ -2,24 +2,29 @@ function initJobWidgets(jobs) {
   Object.keys(jobs).forEach(function (name) {
     const btn = document.querySelector('.job-start-btn[data-job="' + name + '"]');
     const stopBtn = document.querySelector('.job-stop-btn[data-job="' + name + '"]');
-    const badge = document.querySelector('.job-status-badge[data-job="' + name + '"]');
+    // querySelectorAll (non querySelector): la stessa badge di stato può
+    // comparire più volte sulla stessa pagina (es. dashboard: sia nella
+    // riga "Azioni rapide" sia nell'indicatore riepilogativo "Scansioni in
+    // corso") - vanno aggiornate tutte, non solo la prima trovata nel DOM.
+    const badges = document.querySelectorAll('.job-status-badge[data-job="' + name + '"]');
     const logEl = document.querySelector('.job-log[data-job="' + name + '"]');
     const cfg = jobs[name] || {};
 
-    function setBadge(running) {
-      if (!badge) return;
-      badge.className = 'badge job-status-badge ' + (running ? 'badge-info' : 'badge-secondary');
-      badge.setAttribute('data-job', name);
-      badge.innerHTML = running
-        ? '<i class="fas fa-spinner fa-spin"></i> in corso'
-        : '<i class="fas fa-check"></i> inattivo';
+    function setBadges(running) {
+      badges.forEach(function (badge) {
+        badge.className = 'badge job-status-badge ' + (running ? 'badge-info' : 'badge-secondary');
+        badge.setAttribute('data-job', name);
+        badge.innerHTML = running
+          ? '<i class="fas fa-spinner fa-spin"></i> in corso'
+          : '<i class="fas fa-check"></i> inattivo';
+      });
     }
 
     function refreshStatus() {
       fetch('/api/jobs/' + name + '/status')
         .then(function (r) { return r.json(); })
         .then(function (d) {
-          setBadge(d.running);
+          setBadges(d.running);
           if (btn) btn.disabled = d.running;
           if (stopBtn) stopBtn.style.display = d.running ? 'inline-block' : 'none';
           if (logEl && typeof d.log === 'string') {
@@ -68,7 +73,7 @@ function initJobWidgets(jobs) {
       });
     }
 
-    if (badge || logEl) {
+    if (badges.length || logEl) {
       refreshStatus();
       setInterval(refreshStatus, 4000);
     }
