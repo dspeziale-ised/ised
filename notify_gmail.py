@@ -54,6 +54,40 @@ def default_recipient():
     return None
 
 
+def has_app_password():
+    return bool(_load_app_password())
+
+
+def address_from_env():
+    """True se l'indirizzo viene da una variabile d'ambiente (non dal file
+    scrivibile da UI) — in quel caso l'env var ha sempre la priorità e un
+    salvataggio da form non avrebbe effetto visibile."""
+    return bool(os.environ.get("GMAIL_ADDRESS"))
+
+
+def app_password_from_env():
+    return bool(os.environ.get("GMAIL_APP_PASSWORD"))
+
+
+def get_address_display():
+    """Indirizzo mittente da mostrare in un form (non è un segreto quanto
+    l'App Password)."""
+    return _load_address() or ""
+
+
+def save_credentials(address=None, app_password=None, default_to=None):
+    """Salva indirizzo/App Password/destinatario di default nei file
+    dedicati. Un campo vuoto/assente lascia invariato il valore già salvato
+    (così il form può essere sottomesso senza dover re-inserire una
+    password già configurata)."""
+    if address:
+        _ADDRESS_FILE.write_text(address.strip(), encoding="utf-8")
+    if app_password:
+        _APP_PASSWORD_FILE.write_text(app_password.strip(), encoding="utf-8")
+    if default_to:
+        _DEFAULT_TO_FILE.write_text(default_to.strip(), encoding="utf-8")
+
+
 def is_configured():
     return bool(_load_address() and _load_app_password())
 

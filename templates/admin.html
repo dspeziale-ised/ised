@@ -256,6 +256,66 @@
 
         <div id="notifyStatusAlerts"></div>
 
+        <div class="card card-outline card-info">
+          <div class="card-header">
+            <h3 class="card-title"><i class="fas fa-key"></i> Configurazione notifiche</h3>
+          </div>
+          <div class="card-body">
+            <div class="row">
+              <div class="col-md-6">
+                <h6 class="text-muted"><i class="fab fa-telegram"></i> Telegram</h6>
+                <div class="form-group">
+                  <label class="small mb-1">Bot Token</label>
+                  <input type="password" autocomplete="new-password" class="form-control form-control-sm" id="cfgTelegramToken"
+                         placeholder="{{ 'già configurato — lascia vuoto per non modificarlo' if notify_status.telegram_token_set else 'es. 123456789:AAExxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' }}">
+                </div>
+                <div class="form-group mb-0">
+                  <label class="small mb-1">Chat ID</label>
+                  <input type="text" class="form-control form-control-sm" id="cfgTelegramChatId"
+                         value="{{ notify_status.telegram_chat_id }}" placeholder="es. 123456789">
+                </div>
+              </div>
+              <div class="col-md-6">
+                <h6 class="text-muted"><i class="fas fa-envelope"></i> Gmail</h6>
+                <div class="form-group">
+                  <label class="small mb-1">Indirizzo mittente</label>
+                  <input type="email" class="form-control form-control-sm" id="cfgGmailAddress"
+                         value="{{ notify_status.gmail_address }}" placeholder="nome@gmail.com">
+                </div>
+                <div class="form-group">
+                  <label class="small mb-1">App Password</label>
+                  <input type="password" autocomplete="new-password" class="form-control form-control-sm" id="cfgGmailAppPassword"
+                         placeholder="{{ 'già configurata — lascia vuoto per non modificarla' if notify_status.gmail_app_password_set else 'xxxx xxxx xxxx xxxx' }}">
+                </div>
+                <div class="form-group mb-0">
+                  <label class="small mb-1">Destinatario di default (opzionale)</label>
+                  <input type="email" class="form-control form-control-sm" id="cfgGmailDefaultTo"
+                         value="{{ notify_status.gmail_default_to }}" placeholder="destinatario@esempio.com">
+                </div>
+              </div>
+            </div>
+            {% if notify_status.telegram_from_env or notify_status.gmail_from_env %}
+            <div class="alert alert-warning small mt-3 mb-0">
+              <i class="fas fa-triangle-exclamation"></i>
+              {% if notify_status.telegram_from_env %}Telegram{% endif %}
+              {% if notify_status.telegram_from_env and notify_status.gmail_from_env %}e{% endif %}
+              {% if notify_status.gmail_from_env %}Gmail{% endif %}
+              risulta configurato tramite variabili d'ambiente (uso in Docker): hanno sempre la
+              priorità, salvare qui non avrebbe effetto visibile finché restano impostate.
+            </div>
+            {% endif %}
+            <button id="notifyConfigSaveBtn" type="button" class="btn btn-outline-success btn-sm mt-3">
+              <i class="fas fa-save"></i> Salva configurazione
+            </button>
+            <span id="notifyConfigResult" class="small ml-2"></span>
+            <p class="small text-muted mt-2 mb-0">
+              Bot Token e App Password non vengono mai rimostrati una volta salvati: lascia il
+              campo vuoto per mantenere il valore già configurato, compilalo solo per cambiarlo.
+              Salvati in file locali non versionati (stesso meccanismo delle altre chiavi API).
+            </p>
+          </div>
+        </div>
+
         <h6 class="text-muted">Contenuto del report</h6>
         <div class="form-check form-check-inline mb-3">
           <input type="checkbox" class="form-check-input" id="reportKindSummary" checked>
@@ -414,24 +474,60 @@ function selectedReportKinds(prefix) {
   return kinds;
 }
 
-fetch("{{ url_for('api_notify_status') }}")
-  .then(r => r.json())
-  .then(d => {
-    const alerts = document.getElementById('notifyStatusAlerts');
-    const missing = [];
-    if (!d.telegram_configured) missing.push('Telegram (file .telegram_bot_token/.telegram_chat_id o variabili TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID)');
-    if (!d.gmail_configured) missing.push('Gmail (file .gmail_address/.gmail_app_password o variabili GMAIL_ADDRESS/GMAIL_APP_PASSWORD)');
-    if (missing.length) {
-      alerts.innerHTML = '<div class="alert alert-warning small">' +
-        '<i class="fas fa-triangle-exclamation"></i> Non configurato: ' + missing.join('; ') +
-        '. Puoi comunque scaricare il PDF manualmente.</div>';
-    }
-    document.getElementById('sendTelegramNow').disabled = !d.telegram_configured;
-    document.getElementById('sendGmailNow').disabled = !d.gmail_configured;
-    document.getElementById('scheduleTelegram').disabled = !d.telegram_configured;
-    document.getElementById('scheduleGmail').disabled = !d.gmail_configured;
-  })
-  .catch(() => {});
+function refreshNotifyStatus() {
+  return fetch("{{ url_for('api_notify_status') }}")
+    .then(r => r.json())
+    .then(d => {
+      const alerts = document.getElementById('notifyStatusAlerts');
+      const missing = [];
+      if (!d.telegram_configured) missing.push('Telegram');
+      if (!d.gmail_configured) missing.push('Gmail');
+      alerts.innerHTML = missing.length
+        ? '<div class="alert alert-warning small">' +
+          '<i class="fas fa-triangle-exclamation"></i> Non configurato: ' + missing.join(', ') +
+          ' — completa la configurazione qui sotto. Puoi comunque scaricare il PDF manualmente.</div>'
+        : '';
+      document.getElementById('sendTelegramNow').disabled = !d.telegram_configured;
+      document.getElementById('sendGmailNow').disabled = !d.gmail_configured;
+      document.getElementById('scheduleTelegram').disabled = !d.telegram_configured;
+      document.getElementById('scheduleGmail').disabled = !d.gmail_configured;
+      return d;
+    })
+    .catch(() => {});
+}
+refreshNotifyStatus();
+
+document.getElementById('notifyConfigSaveBtn').addEventListener('click', function () {
+  const btn = this;
+  btn.disabled = true;
+  const resultEl = document.getElementById('notifyConfigResult');
+  resultEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Salvataggio...';
+  const body = new URLSearchParams();
+  body.set('telegram_bot_token', document.getElementById('cfgTelegramToken').value);
+  body.set('telegram_chat_id', document.getElementById('cfgTelegramChatId').value);
+  body.set('gmail_address', document.getElementById('cfgGmailAddress').value);
+  body.set('gmail_app_password', document.getElementById('cfgGmailAppPassword').value);
+  body.set('gmail_default_to', document.getElementById('cfgGmailDefaultTo').value);
+  fetch("{{ url_for('api_notify_config') }}", { method: 'POST', body: body })
+    .then(r => r.json())
+    .then(() => {
+      resultEl.innerHTML = '<span class="text-success"><i class="fas fa-check"></i> Salvato.</span>';
+      document.getElementById('cfgTelegramToken').value = '';
+      document.getElementById('cfgGmailAppPassword').value = '';
+      return refreshNotifyStatus();
+    })
+    .then(d => {
+      if (d) {
+        document.getElementById('cfgTelegramToken').placeholder = d.telegram_token_set
+          ? 'già configurato — lascia vuoto per non modificarlo' : 'es. 123456789:AAExxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
+        document.getElementById('cfgGmailAppPassword').placeholder = d.gmail_app_password_set
+          ? 'già configurata — lascia vuoto per non modificarla' : 'xxxx xxxx xxxx xxxx';
+        document.getElementById('sendGmailToNow').value = d.gmail_default_to || document.getElementById('sendGmailToNow').value;
+      }
+    })
+    .catch(() => { resultEl.innerHTML = '<span class="text-danger">Errore di rete.</span>'; })
+    .finally(() => { btn.disabled = false; });
+});
 
 document.getElementById('reportDownloadBtn').addEventListener('click', function () {
   const kinds = selectedReportKinds('reportKind');

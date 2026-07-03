@@ -409,11 +409,7 @@ def admin_panel():
         data_dir=str(DATA_DIR),
         input_ip_count=count_input_ips(),
         jobs_running={name: is_job_running(name) for name in JOBS},
-        notify_status={
-            "telegram_configured": notify_telegram.is_configured(),
-            "gmail_configured": notify_gmail.is_configured(),
-            "gmail_default_to": notify_gmail.default_recipient() or "",
-        },
+        notify_status=notify_status_dict(),
         report_schedule_config=report_schedule.load(),
     )
 
@@ -1307,13 +1303,37 @@ def reports_send():
     return jsonify({"ok": ok, "results": results})
 
 
+def notify_status_dict():
+    return {
+        "telegram_configured": notify_telegram.is_configured(),
+        "telegram_chat_id": notify_telegram.get_chat_id_display(),
+        "telegram_token_set": notify_telegram.has_token(),
+        "telegram_from_env": notify_telegram.token_from_env() or notify_telegram.chat_id_from_env(),
+        "gmail_configured": notify_gmail.is_configured(),
+        "gmail_address": notify_gmail.get_address_display(),
+        "gmail_app_password_set": notify_gmail.has_app_password(),
+        "gmail_default_to": notify_gmail.default_recipient() or "",
+        "gmail_from_env": notify_gmail.address_from_env() or notify_gmail.app_password_from_env(),
+    }
+
+
 @app.route("/api/notify-status")
 def api_notify_status():
-    return jsonify({
-        "telegram_configured": notify_telegram.is_configured(),
-        "gmail_configured": notify_gmail.is_configured(),
-        "gmail_default_to": notify_gmail.default_recipient() or "",
-    })
+    return jsonify(notify_status_dict())
+
+
+@app.route("/api/notify-config", methods=["POST"])
+def api_notify_config():
+    notify_telegram.save_credentials(
+        token=(request.form.get("telegram_bot_token") or "").strip(),
+        chat_id=(request.form.get("telegram_chat_id") or "").strip(),
+    )
+    notify_gmail.save_credentials(
+        address=(request.form.get("gmail_address") or "").strip(),
+        app_password=(request.form.get("gmail_app_password") or "").strip(),
+        default_to=(request.form.get("gmail_default_to") or "").strip(),
+    )
+    return jsonify({"ok": True})
 
 
 @app.route("/api/report-schedule", methods=["GET", "POST"])

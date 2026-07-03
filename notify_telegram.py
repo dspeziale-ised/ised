@@ -42,6 +42,36 @@ def is_configured():
     return bool(_load_token() and _load_chat_id())
 
 
+def has_token():
+    return bool(_load_token())
+
+
+def token_from_env():
+    """True se il token viene da una variabile d'ambiente (non dal file
+    scrivibile da UI) — in quel caso l'env var ha sempre la priorità e un
+    salvataggio da form non avrebbe effetto visibile."""
+    return bool(os.environ.get("TELEGRAM_BOT_TOKEN"))
+
+
+def chat_id_from_env():
+    return bool(os.environ.get("TELEGRAM_CHAT_ID"))
+
+
+def get_chat_id_display():
+    """Chat ID da mostrare in un form (non è un segreto quanto il token)."""
+    return _load_chat_id() or ""
+
+
+def save_credentials(token=None, chat_id=None):
+    """Salva token/chat_id nei file dedicati. Un campo vuoto/assente lascia
+    invariato il valore già salvato (così il form può essere sottomesso
+    senza dover re-inserire un token già configurato)."""
+    if token:
+        _TOKEN_FILE.write_text(token.strip(), encoding="utf-8")
+    if chat_id:
+        _CHAT_ID_FILE.write_text(chat_id.strip(), encoding="utf-8")
+
+
 def send_document(file_bytes, filename, caption=None, chat_id=None, timeout=60):
     """Invia un file (es. PDF) al bot Telegram. Ritorna la risposta JSON
     dell'API in caso di successo, solleva TelegramError altrimenti."""
