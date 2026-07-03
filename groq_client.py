@@ -26,7 +26,7 @@ from llm_common import (
 PROVIDER_NAME = "groq"
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
-_KEY_FILE = Path(__file__).parent / ".groq_api_key"
+_KEY_FILE = Path(__file__).parent / "keys" / "groq_api_key"
 
 # Alias per compatibilità con codice/test esistenti che importano da qui.
 GroqError = LLMError
@@ -58,7 +58,7 @@ def classify_signature_groups(groups, timeout=90, model=None):
     if not api_key:
         raise LLMError(
             "Nessuna API key Groq trovata (variabile d'ambiente GROQ_API_KEY "
-            "o file .groq_api_key nella directory del progetto)."
+            "o file keys/groq_api_key)."
         )
 
     payload = {

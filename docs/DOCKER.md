@@ -56,7 +56,7 @@ da un container via `host.docker.internal`). Configura un token condiviso
 comandi nmap che il chiamante gli passa:
 
 ```
-echo il-tuo-token-segreto > .nmap_proxy_token
+mkdir -p keys && echo il-tuo-token-segreto > keys/nmap_proxy_token
 ```
 
 (oppure imposta la variabile d'ambiente `NMAP_PROXY_TOKEN` invece del file).

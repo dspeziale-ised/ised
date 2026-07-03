@@ -26,7 +26,7 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_API_URL = (
     f"https://generativelanguage.googleapis.com/v1beta/models/{{model}}:generateContent"
 )
-_KEY_FILE = Path(__file__).parent / ".gemini_api_key"
+_KEY_FILE = Path(__file__).parent / "keys" / "gemini_api_key"
 
 
 def is_configured():
@@ -57,7 +57,7 @@ def classify_signature_groups(groups, timeout=90, model=None):
     if not api_key:
         raise LLMError(
             "Nessuna API key Gemini trovata (variabile d'ambiente GEMINI_API_KEY "
-            "o file .gemini_api_key nella directory del progetto)."
+            "o file keys/gemini_api_key)."
         )
 
     url = GEMINI_API_URL.format(model=model or GEMINI_MODEL)

@@ -2,7 +2,7 @@
 provider di fallback per la classificazione del tipo di dispositivo.
 
 Usa l'endpoint compatibile OpenAI:
-- se è configurata una API key (OLLAMA_API_KEY o file .ollama_api_key),
+- se è configurata una API key (OLLAMA_API_KEY o file keys/ollama_api_key),
   punta a Ollama Cloud (https://ollama.com);
 - altrimenti punta a un'istanza locale (http://localhost:11434), senza
   autenticazione.
@@ -28,7 +28,7 @@ from llm_common import (
 )
 
 PROVIDER_NAME = "ollama"
-_KEY_FILE = Path(__file__).parent / ".ollama_api_key"
+_KEY_FILE = Path(__file__).parent / "keys" / "ollama_api_key"
 
 OLLAMA_CLOUD_URL = "https://ollama.com/v1/chat/completions"
 OLLAMA_LOCAL_URL = os.environ.get("OLLAMA_LOCAL_URL", "http://localhost:11434/v1/chat/completions")

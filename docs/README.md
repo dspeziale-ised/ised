@@ -91,18 +91,21 @@ templates/                   Template Jinja (AdminLTE 3, DataTables server-side)
 instance/inventory.db        Database SQLite (uso nativo, non versionato)
 instance/attack_enterprise.json  Cache locale della matrice ufficiale MITRE ATT&CK (~47MB, non versionato)
 data/*.xml                   Output nmap ping-sweep da cui si estraggono gli IP (non versionato)
+keys/                         Chiavi API/token, un file per credenziale (non versionato)
+logs/                         Log dei job in background, un file per job (non versionato)
 
 Dockerfile, docker-compose.yml   Containerizzazione (app + PostgreSQL, nmap resta sull'host)
 ```
 
 ## Sicurezza / dati sensibili
 
-- Le chiavi/token (`.groq_api_key`, `.gemini_api_key`, `.ollama_api_key`,
-  `.nvd_api_key`, `.telegram_bot_token`, `.telegram_chat_id`,
-  `.gmail_address`, `.gmail_app_password`, `.gmail_to`,
-  `.nmap_proxy_token`) e il database (`instance/`) **non sono versionati**
-  (`.gitignore`) — in Docker si passano come variabili d'ambiente (vedi
-  `.env.example` e [DOCKER.md](DOCKER.md))
+- Le chiavi/token (`keys/groq_api_key`, `keys/gemini_api_key`,
+  `keys/ollama_api_key`, `keys/nvd_api_key`, `keys/telegram_bot_token`,
+  `keys/telegram_chat_id`, `keys/gmail_address`, `keys/gmail_app_password`,
+  `keys/gmail_to`, `keys/nmap_proxy_token`) e il database (`instance/`)
+  **non sono versionati** (`.gitignore` esclude l'intera cartella `keys/`)
+  — in Docker si passano come variabili d'ambiente (vedi `.env.example` e
+  [DOCKER.md](DOCKER.md))
 - I dati di scansione (IP, hostname, vulnerabilità della rete interna) non
   vanno pubblicati in repository pubblici
 - Il proxy nmap (`nmap_proxy_server.py`) esegue i comandi che riceve: va

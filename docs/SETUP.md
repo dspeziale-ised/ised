@@ -25,19 +25,19 @@ raggiungibilità parte da solo in background (thread interno).
 
 ## Chiavi API e token (tutti opzionali)
 
-Ogni chiave va salvata in un file dedicato nella root del progetto (mai
-committare — sono già in `.gitignore`), oppure in una variabile d'ambiente
-equivalente:
+Ogni chiave va salvata in un file dedicato nella cartella `keys/` (mai
+committare — l'intera cartella è già in `.gitignore`), oppure in una
+variabile d'ambiente equivalente:
 
-| Funzionalità | File | Variabile d'ambiente | Note |
+| Funzionalità | File (in `keys/`) | Variabile d'ambiente | Note |
 |---|---|---|---|
-| Classificazione AI (Ollama) | `.ollama_api_key` | `OLLAMA_API_KEY` | Ollama Cloud; senza key usa un'istanza locale (`ollama serve`) |
-| Classificazione AI (Groq) | `.groq_api_key` | `GROQ_API_KEY` | Free tier: 100k token/giorno |
-| Classificazione AI (Gemini) | `.gemini_api_key` | `GEMINI_API_KEY` | Free tier: 20 richieste/giorno per modello |
-| CVE da NVD | `.nvd_api_key` | `NVD_API_KEY` | Opzionale: senza key 5 richieste/30s, con key 50/30s |
-| Notifica report (Telegram) | `.telegram_bot_token` + `.telegram_chat_id` | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | Bot creato via @BotFather |
-| Notifica report (Gmail) | `.gmail_address` + `.gmail_app_password` | `GMAIL_ADDRESS` + `GMAIL_APP_PASSWORD` | Richiede App Password Google (verifica in due passaggi attiva); `.gmail_to`/`GMAIL_TO` per il destinatario di default |
-| Proxy nmap (solo Docker) | `.nmap_proxy_token` | `NMAP_PROXY_TOKEN` | Vedi [DOCKER.md](DOCKER.md) |
+| Classificazione AI (Ollama) | `ollama_api_key` | `OLLAMA_API_KEY` | Ollama Cloud; senza key usa un'istanza locale (`ollama serve`) |
+| Classificazione AI (Groq) | `groq_api_key` | `GROQ_API_KEY` | Free tier: 100k token/giorno |
+| Classificazione AI (Gemini) | `gemini_api_key` | `GEMINI_API_KEY` | Free tier: 20 richieste/giorno per modello |
+| CVE da NVD | `nvd_api_key` | `NVD_API_KEY` | Opzionale: senza key 5 richieste/30s, con key 50/30s |
+| Notifica report (Telegram) | `telegram_bot_token` + `telegram_chat_id` | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | Bot creato via @BotFather; anche configurabili dalla UI (Amministrazione → Report) |
+| Notifica report (Gmail) | `gmail_address` + `gmail_app_password` | `GMAIL_ADDRESS` + `GMAIL_APP_PASSWORD` | Richiede App Password Google (verifica in due passaggi attiva); `gmail_to`/`GMAIL_TO` per il destinatario di default |
+| Proxy nmap (solo Docker) | `nmap_proxy_token` | `NMAP_PROXY_TOKEN` | Vedi [DOCKER.md](DOCKER.md) |
 
 Senza le chiavi AI/NVD, la classificazione AI e la scansione vulnerabilità
 falliscono con un errore chiaro (non bloccano il resto dell'app). La

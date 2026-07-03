@@ -11,7 +11,7 @@ Uso:
     python nmap_proxy_server.py --host 127.0.0.1 # solo se il chiamante non è containerizzato
 
 Sicurezza: il proxy esegue comandi nmap arbitrari passati dal chiamante.
-Configura un token condiviso (file .nmap_proxy_token nella stessa cartella,
+Configura un token condiviso (file keys/nmap_proxy_token,
 o variabile d'ambiente NMAP_PROXY_TOKEN) prima di esporlo oltre 127.0.0.1 —
 è richiesto nell'header 'X-Proxy-Token' di ogni richiesta. Deve restare in
 ascolto su 0.0.0.0 (non solo 127.0.0.1) perché un container Docker Desktop
@@ -29,7 +29,7 @@ from flask import Flask, jsonify, request
 
 app = Flask(__name__)
 NMAP_BIN = shutil.which("nmap") or "nmap"
-_TOKEN_FILE = Path(__file__).parent / ".nmap_proxy_token"
+_TOKEN_FILE = Path(__file__).parent / "keys" / "nmap_proxy_token"
 
 
 def _expected_token():
@@ -95,7 +95,7 @@ def main():
 
     if not _expected_token():
         print(
-            "[!] ATTENZIONE: nessun token configurato (.nmap_proxy_token o NMAP_PROXY_TOKEN). "
+            "[!] ATTENZIONE: nessun token configurato (keys/nmap_proxy_token o NMAP_PROXY_TOKEN). "
             "Chiunque raggiunga questa porta puo' eseguire comandi nmap arbitrari sull'host. "
             "Configura il token prima di esporre il proxy oltre 127.0.0.1."
         )

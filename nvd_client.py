@@ -17,7 +17,7 @@ import urllib.request
 from pathlib import Path
 
 NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
-_KEY_FILE = Path(__file__).parent / ".nvd_api_key"
+_KEY_FILE = Path(__file__).parent / "keys" / "nvd_api_key"
 BROWSER_LIKE_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) net-inventory-vulnscan/1.0"
 )

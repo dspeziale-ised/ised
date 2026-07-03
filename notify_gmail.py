@@ -4,7 +4,7 @@ PDF dell'inventario di rete. Autenticazione con una App Password Google
 libreria esterna oltre smtplib/email della standard library.
 
 Configurazione (stesso pattern delle altre chiavi API del progetto): file
-dedicati nella root del progetto (mai committare, già in .gitignore) oppure
+dedicati nella cartella keys/ (mai committare, già in .gitignore) oppure
 variabili d'ambiente equivalenti.
 """
 
@@ -18,9 +18,10 @@ from pathlib import Path
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
 
-_ADDRESS_FILE = Path(__file__).parent / ".gmail_address"
-_APP_PASSWORD_FILE = Path(__file__).parent / ".gmail_app_password"
-_DEFAULT_TO_FILE = Path(__file__).parent / ".gmail_to"
+_KEYS_DIR = Path(__file__).parent / "keys"
+_ADDRESS_FILE = _KEYS_DIR / "gmail_address"
+_APP_PASSWORD_FILE = _KEYS_DIR / "gmail_app_password"
+_DEFAULT_TO_FILE = _KEYS_DIR / "gmail_to"
 
 
 class GmailError(Exception):
@@ -80,6 +81,7 @@ def save_credentials(address=None, app_password=None, default_to=None):
     dedicati. Un campo vuoto/assente lascia invariato il valore già salvato
     (così il form può essere sottomesso senza dover re-inserire una
     password già configurata)."""
+    _KEYS_DIR.mkdir(parents=True, exist_ok=True)
     if address:
         _ADDRESS_FILE.write_text(address.strip(), encoding="utf-8")
     if app_password:
@@ -103,10 +105,10 @@ def send_document(file_bytes, filename, to_address=None, subject=None, body=None
     if not address or not app_password:
         raise GmailError(
             "Account Gmail non configurato (variabili d'ambiente GMAIL_ADDRESS/"
-            "GMAIL_APP_PASSWORD o file .gmail_address/.gmail_app_password)."
+            "GMAIL_APP_PASSWORD o file keys/gmail_address e keys/gmail_app_password)."
         )
     if not recipient:
-        raise GmailError("Nessun destinatario specificato (né passato né in .gmail_to/GMAIL_TO).")
+        raise GmailError("Nessun destinatario specificato (né passato né in keys/gmail_to o GMAIL_TO).")
 
     msg = MIMEMultipart()
     msg["From"] = address

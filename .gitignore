@@ -1,14 +1,5 @@
 # Segreti: mai committare
-.groq_api_key
-.gemini_api_key
-.ollama_api_key
-.nvd_api_key
-.telegram_bot_token
-.telegram_chat_id
-.gmail_address
-.gmail_app_password
-.gmail_to
-.nmap_proxy_token
+keys/
 *.env
 
 # Dati di rete interni / risultati scansione: contengono IP, hostname,
@@ -22,6 +13,7 @@ data/
 up_ips.txt
 
 # Log e file di stato runtime
+logs/
 *.log
 *_log.txt
 *.lock

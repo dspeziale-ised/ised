@@ -28,6 +28,8 @@ BASE_DIR = Path(__file__).parent
 SCAN_INPUT_FILE = Path(os.environ.get("SCAN_INPUT", BASE_DIR / "up_ips.txt"))
 SCRIPTS_DIR = BASE_DIR / "scripts"
 DATA_DIR = BASE_DIR / "data"
+LOGS_DIR = BASE_DIR / "logs"
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 # DATABASE_URL (postgresql://...) ha priorità: è così che il container Docker
 # punta al servizio Postgres. Senza, si torna al comportamento nativo di
@@ -249,31 +251,31 @@ JOBS = {
              str(SCRIPTS_DIR / "nmap-discovery-10net.ps1")]
         ),
         "lock_file": BASE_DIR / "discovery.lock",
-        "log_file": BASE_DIR / "discovery_log.txt",
+        "log_file": LOGS_DIR / "discovery_log.txt",
         "label": "Discovery iniziale",
     },
     "rescan": {
         "cmd": [sys.executable, str(BASE_DIR / "run_rescan.py")],
         "lock_file": BASE_DIR / "rescan.lock",
-        "log_file": BASE_DIR / "rescan_log.txt",
+        "log_file": LOGS_DIR / "rescan_log.txt",
         "label": "Aggiornamento scansione",
     },
     "classify": {
         "cmd": [sys.executable, str(BASE_DIR / "classify_devices.py")],
         "lock_file": BASE_DIR / "classify.lock",
-        "log_file": BASE_DIR / "classify_log.txt",
+        "log_file": LOGS_DIR / "classify_log.txt",
         "label": "Classificazione AI",
     },
     "vuln": {
         "cmd": [sys.executable, str(BASE_DIR / "vuln_scan.py")],
         "lock_file": BASE_DIR / "vuln.lock",
-        "log_file": BASE_DIR / "vuln_log.txt",
+        "log_file": LOGS_DIR / "vuln_log.txt",
         "label": "Scansione vulnerabilità",
     },
     "attack": {
         "cmd": [sys.executable, str(BASE_DIR / "attack_scan.py")],
         "lock_file": BASE_DIR / "attack.lock",
-        "log_file": BASE_DIR / "attack_log.txt",
+        "log_file": LOGS_DIR / "attack_log.txt",
         "label": "Mappatura MITRE ATT&CK",
     },
 }

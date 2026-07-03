@@ -32,7 +32,7 @@ from pathlib import Path
 import requests
 
 PROXY_URL = (os.environ.get("NMAP_PROXY_URL") or "").rstrip("/") or None
-_TOKEN_FILE = Path(__file__).parent / ".nmap_proxy_token"
+_TOKEN_FILE = Path(__file__).parent / "keys" / "nmap_proxy_token"
 
 
 def _load_token():

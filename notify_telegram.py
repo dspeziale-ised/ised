@@ -2,7 +2,7 @@
 per notificare il report PDF dell'inventario di rete.
 
 Configurazione (stesso pattern delle altre chiavi API del progetto): file
-dedicati nella root del progetto (mai committare, già in .gitignore) oppure
+dedicati nella cartella keys/ (mai committare, già in .gitignore) oppure
 variabili d'ambiente equivalenti.
 """
 
@@ -12,8 +12,9 @@ from pathlib import Path
 import requests
 
 API_BASE = "https://api.telegram.org/bot"
-_TOKEN_FILE = Path(__file__).parent / ".telegram_bot_token"
-_CHAT_ID_FILE = Path(__file__).parent / ".telegram_chat_id"
+_KEYS_DIR = Path(__file__).parent / "keys"
+_TOKEN_FILE = _KEYS_DIR / "telegram_bot_token"
+_CHAT_ID_FILE = _KEYS_DIR / "telegram_chat_id"
 
 
 class TelegramError(Exception):
@@ -66,6 +67,7 @@ def save_credentials(token=None, chat_id=None):
     """Salva token/chat_id nei file dedicati. Un campo vuoto/assente lascia
     invariato il valore già salvato (così il form può essere sottomesso
     senza dover re-inserire un token già configurato)."""
+    _KEYS_DIR.mkdir(parents=True, exist_ok=True)
     if token:
         _TOKEN_FILE.write_text(token.strip(), encoding="utf-8")
     if chat_id:
@@ -80,7 +82,7 @@ def send_document(file_bytes, filename, caption=None, chat_id=None, timeout=60):
     if not token or not configured_chat_id:
         raise TelegramError(
             "Bot Telegram non configurato (variabili d'ambiente TELEGRAM_BOT_TOKEN/"
-            "TELEGRAM_CHAT_ID o file .telegram_bot_token/.telegram_chat_id)."
+            "TELEGRAM_CHAT_ID o file keys/telegram_bot_token e keys/telegram_chat_id)."
         )
 
     url = f"{API_BASE}{token}/sendDocument"
