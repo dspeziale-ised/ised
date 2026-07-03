@@ -32,6 +32,7 @@ from pathlib import Path
 
 import requests
 
+import nmap_conn_count
 import secrets_store
 
 # nmap stampa questa riga riepilogativa su stdout solo con -v (mai nell'XML
@@ -74,26 +75,46 @@ def is_proxy_mode():
 
 
 class CompletedProcessLike:
-    """Oggetto minimale compatibile con subprocess.CompletedProcess (solo i
-    campi usati nel resto del progetto: returncode, stdout, stderr)."""
+    """Oggetto minimale compatibile con subprocess.CompletedProcess (i campi
+    usati nel resto del progetto: returncode, stdout, stderr) più
+    connections_out/connections_in (vedi nmap_conn_count), assenti da
+    subprocess.CompletedProcess — per questo entrambe le modalità (nativa e
+    proxy) ritornano sempre questo tipo, non più un CompletedProcess vero
+    solo in modalità nativa."""
 
-    def __init__(self, args, returncode, stdout, stderr):
+    def __init__(self, args, returncode, stdout, stderr, connections_out=0, connections_in=0):
         self.args = args
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
+        self.connections_out = connections_out
+        self.connections_in = connections_in
 
 
 def run_nmap(args, timeout=None, capture_output=True, text=True):
     """Esegue nmap con gli argomenti indicati (senza il nome del binario).
-    In assenza di NMAP_PROXY_URL, comportamento identico a
-    subprocess.run(['nmap', *args], capture_output=capture_output, text=text,
-    timeout=timeout). Con NMAP_PROXY_URL impostata, inoltra al proxy."""
+    In assenza di NMAP_PROXY_URL, esegue nmap in locale (comportamento
+    sostanzialmente identico a subprocess.run, con l'aggiunta del conteggio
+    connessioni via nmap_conn_count — vedi CompletedProcessLike). Con
+    NMAP_PROXY_URL impostata, inoltra al proxy."""
     if not PROXY_URL:
-        return subprocess.run(
-            ["nmap", *args], capture_output=capture_output, text=text, timeout=timeout
-        )
+        return _run_native(args, timeout=timeout, text=text)
     return _run_via_proxy(args, timeout=timeout, text=text)
+
+
+def _run_native(args, timeout, text):
+    returncode, stdout, stderr, timed_out, conns_out, conns_in = \
+        nmap_conn_count.run_and_count_connections(["nmap", *args], timeout=timeout)
+    stdout_result = stdout.decode("utf-8", errors="replace") if text else stdout
+    stderr_result = stderr.decode("utf-8", errors="replace") if text else stderr
+    if timed_out:
+        raise subprocess.TimeoutExpired(
+            cmd=["nmap", *args], timeout=timeout, output=stdout_result, stderr=stderr_result
+        )
+    return CompletedProcessLike(
+        args=["nmap", *args], returncode=returncode, stdout=stdout_result, stderr=stderr_result,
+        connections_out=conns_out, connections_in=conns_in,
+    )
 
 
 def _extract_output_file(args):
@@ -136,9 +157,19 @@ def _run_via_proxy(args, timeout, text):
         headers["X-Proxy-Token"] = token
 
     request_timeout = (timeout or 120) + 20  # margine oltre il timeout nmap lato proxy
+    # 'relocate_xml' dice al proxy di spostare l'XML su un file temporaneo
+    # SOLO quando qui '-oX <path reale>' è stato convertito in '-oX -' (per
+    # trasmetterlo via HTTP): SOLO in quel caso serve liberare lo stdout
+    # reale per il riepilogo testuale (vedi nmap_proxy_server). Se invece è
+    # il chiamante stesso a passare '-oX -' direttamente (es. host_monitor.py,
+    # vuln_scan.py: vogliono l'XML grezzo in stdout, senza scriverlo su
+    # nessun file), local_output_path è None e la richiesta NON lo chiede —
+    # altrimenti quei chiamanti riceverebbero il testo verboso al posto
+    # dell'XML che si aspettano di parsare da stdout.
     try:
         resp = requests.post(
-            f"{PROXY_URL}/nmap", json={"args": proxy_args, "timeout": timeout},
+            f"{PROXY_URL}/nmap",
+            json={"args": proxy_args, "timeout": timeout, "relocate_xml": bool(local_output_path)},
             headers=headers, timeout=request_timeout,
         )
     except requests.Timeout as e:
@@ -158,19 +189,30 @@ def _run_via_proxy(args, timeout, text):
     stdout_bytes = base64.b64decode(data.get("stdout_b64") or "")
     stderr_bytes = base64.b64decode(data.get("stderr_b64") or "")
 
+    # Quando il chiamante aveva chiesto '-oX <path>', il proxy rileva '-oX -'
+    # e rilocalizza l'XML su un file temporaneo lato host invece che su
+    # stdout (vedi nmap_proxy_server._relocate_stdout_xml): questo libera lo
+    # stdout REALE (in 'stdout_b64') per il riepilogo testuale di nmap
+    # (incluso 'Raw packets sent...', usato per il traffico in dashboard),
+    # mentre l'XML vero arriva a parte in 'xml_b64'. Scritto anche in caso
+    # di timeout (XML parziale eventualmente prodotto prima dell'interruzione),
+    # non solo sul successo. Se xml_b64 manca (proxy non aggiornato) si
+    # ricade sul vecchio comportamento (stdout_bytes = XML).
+    if local_output_path:
+        xml_b64 = data.get("xml_b64")
+        xml_bytes = base64.b64decode(xml_b64) if xml_b64 is not None else stdout_bytes
+        Path(local_output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(local_output_path).write_bytes(xml_bytes)
+
+    stdout_result = stdout_bytes.decode("utf-8", errors="replace") if text else stdout_bytes
+    stderr_result = stderr_bytes.decode("utf-8", errors="replace") if text else stderr_bytes
+
     if data.get("timed_out"):
         raise subprocess.TimeoutExpired(
-            cmd=["nmap", *args], timeout=timeout, output=stdout_bytes, stderr=stderr_bytes
+            cmd=["nmap", *args], timeout=timeout, output=stdout_result, stderr=stderr_result
         )
 
-    if local_output_path:
-        Path(local_output_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(local_output_path).write_bytes(stdout_bytes)
-        stdout_result = "" if text else b""
-    else:
-        stdout_result = stdout_bytes.decode("utf-8", errors="replace") if text else stdout_bytes
-
-    stderr_result = stderr_bytes.decode("utf-8", errors="replace") if text else stderr_bytes
     return CompletedProcessLike(
-        args=["nmap", *args], returncode=data["returncode"], stdout=stdout_result, stderr=stderr_result
+        args=["nmap", *args], returncode=data["returncode"], stdout=stdout_result, stderr=stderr_result,
+        connections_out=data.get("connections_out", 0), connections_in=data.get("connections_in", 0),
     )

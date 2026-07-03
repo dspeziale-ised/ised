@@ -2,3 +2,4 @@ Flask>=3.0
 reportlab>=4.0
 requests>=2.30
 psycopg2-binary>=2.9
+psutil>=6.0

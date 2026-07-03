@@ -510,6 +510,13 @@ def api_scan_effort():
     return jsonify({"ok": True, "level": scan_effort.load_level(), "profile": scan_effort.current_profile()})
 
 
+@app.route("/api/traffic-stats")
+def api_traffic_stats():
+    since_minutes = request.args.get("since_minutes", type=int, default=60)
+    bucket_minutes = request.args.get("bucket_minutes", type=int, default=2)
+    return jsonify(scanner_db.traffic_summary(get_db(), since_minutes=since_minutes, bucket_minutes=bucket_minutes))
+
+
 JOB_FORCE_FLAG = {"attack": "--update-matrix"}
 
 

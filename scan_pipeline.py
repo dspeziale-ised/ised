@@ -44,13 +44,25 @@ def run_and_store(cmd, xml_out, conn, target_count=None, timeout=None):
     incluso), utile ai chiamanti che vogliono stampare un riepilogo per
     host; error_detail è il messaggio dell'eccezione se status == 'error'
     (None altrimenti), utile ai chiamanti che vogliono loggarlo."""
+    # -v: nessun effetto sull'XML (-oX resta l'unica fonte usata per parsing/
+    # host), ma fa stampare a nmap il riepilogo testuale con "Raw packets
+    # sent/Rcvd" usato per il traffico in dashboard (vedi
+    # nmap_proxy_client.parse_traffic_stats).
+    cmd = list(cmd) if "-v" in cmd else ["-v", *cmd]
+
     started = now_iso()
     status = "ok"
     error_detail = None
+    traffic_stats = None
+    connections_out = connections_in = 0
     try:
-        nmap_proxy_client.run_nmap(cmd, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
+        result = nmap_proxy_client.run_nmap(cmd, capture_output=True, text=True, timeout=timeout)
+        traffic_stats = nmap_proxy_client.parse_traffic_stats(result.stdout)
+        connections_out = getattr(result, "connections_out", 0)
+        connections_in = getattr(result, "connections_in", 0)
+    except subprocess.TimeoutExpired as e:
         status = "timeout"
+        traffic_stats = nmap_proxy_client.parse_traffic_stats(e.stdout if isinstance(e.stdout, str) else None)
     except Exception as e:
         # Es. RuntimeError del proxy nmap (non raggiungibile, token non
         # valido, ...): senza questo except un singolo batch/target
@@ -59,6 +71,11 @@ def run_and_store(cmd, xml_out, conn, target_count=None, timeout=None):
         status = "error"
         error_detail = str(e)
     finished = now_iso()
+
+    if traffic_stats:
+        duration = (datetime.fromisoformat(finished) - datetime.fromisoformat(started)).total_seconds()
+        scanner_db.log_traffic(conn, "scan_pipeline", duration_seconds=duration,
+                                connections_out=connections_out, connections_in=connections_in, **traffic_stats)
 
     hosts = []
     if xml_out.exists():

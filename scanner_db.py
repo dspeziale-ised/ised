@@ -312,15 +312,28 @@ CREATE TABLE IF NOT EXISTS nmap_scan_templates (
 -- solo con -v). 'source' indica lo script che l'ha generato (scan_pipeline/
 -- discovery/monitor), utile per un'eventuale ripartizione futura. Righe
 -- individuali (non un unico contatore cumulativo) per poter mostrare un
--- grafico dell'andamento nel tempo, non solo un totale.
+-- grafico dell'andamento nel tempo, non solo un totale. 'duration_seconds'
+-- (tempo reale della chiamata nmap, misurato dal chiamante) è necessario
+-- per il grafico "al secondo": senza saperla, l'intero traffico di una
+-- scansione lenta (T0-T2/--max-rate basso, che può durare minuti/ore)
+-- finirebbe attribuito all'istante in cui la scansione termina, mostrando
+-- un picco istantaneo invece del tasso basso e diffuso che rappresenta
+-- davvero (vedi traffic_summary). 'connections_out'/'connections_in'
+-- (vedi nmap_conn_count.py) sono un conteggio APPROSSIMATO PER DIFETTO
+-- delle connessioni TCP/UDP distinte osservate via polling psutil sul
+-- processo nmap mentre gira: un poll ogni ~100ms non cattura connessioni
+-- più brevi dell'intervallo, tipico delle scansioni SYN.
 CREATE TABLE IF NOT EXISTS traffic_log (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    recorded_at  TEXT NOT NULL,
-    source       TEXT,
-    packets_sent INTEGER DEFAULT 0,
-    bytes_sent   INTEGER DEFAULT 0,
-    packets_rcvd INTEGER DEFAULT 0,
-    bytes_rcvd   INTEGER DEFAULT 0
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    recorded_at      TEXT NOT NULL,
+    source           TEXT,
+    packets_sent     INTEGER DEFAULT 0,
+    bytes_sent       INTEGER DEFAULT 0,
+    packets_rcvd     INTEGER DEFAULT 0,
+    bytes_rcvd       INTEGER DEFAULT 0,
+    duration_seconds REAL DEFAULT 0,
+    connections_out  INTEGER DEFAULT 0,
+    connections_in   INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_traffic_log_recorded_at ON traffic_log(recorded_at);
 
@@ -379,6 +392,7 @@ def init_db(conn):
     ensure_ai_columns(conn)
     ensure_service_columns(conn)
     ensure_fingerprint_columns(conn)
+    ensure_traffic_columns(conn)
 
 
 AI_COLUMNS = {
@@ -402,6 +416,26 @@ FINGERPRINT_COLUMNS = {
     "status_reason": "TEXT",
     "ttl": "INTEGER",
 }
+
+
+TRAFFIC_COLUMNS = {
+    "duration_seconds": "REAL DEFAULT 0",
+    "connections_out": "INTEGER DEFAULT 0",
+    "connections_in": "INTEGER DEFAULT 0",
+}
+
+
+def ensure_traffic_columns(conn):
+    """Aggiunge le colonne di TRAFFIC_COLUMNS su traffic_log se non esistono
+    già (migrazione additiva e idempotente, sicura su un DB già popolato)."""
+    existing = _get_columns(conn, "traffic_log")
+    added = False
+    for col, col_type in TRAFFIC_COLUMNS.items():
+        if col not in existing:
+            conn.execute(f"ALTER TABLE traffic_log ADD COLUMN {col} {col_type}")
+            added = True
+    if added:
+        conn.commit()
 
 
 def ensure_service_columns(conn):
@@ -898,59 +932,126 @@ def delete_scan_template(conn, name):
     return (cur.rowcount or 0) > 0
 
 
-def log_traffic(conn, source, packets_sent, bytes_sent, packets_rcvd, bytes_rcvd):
-    """Registra il traffico (pacchetti/byte) di UNA invocazione nmap
-    completata. Una riga per invocazione (non un contatore cumulativo unico)
-    per poter ricostruire un andamento nel tempo, vedi traffic_summary()."""
+def log_traffic(conn, source, packets_sent, bytes_sent, packets_rcvd, bytes_rcvd, duration_seconds=0,
+                 connections_out=0, connections_in=0):
+    """Registra il traffico (pacchetti/byte/connessioni) di UNA invocazione
+    nmap completata. Una riga per invocazione (non un contatore cumulativo
+    unico) per poter ricostruire un andamento nel tempo, vedi
+    traffic_summary(). 'duration_seconds' (tempo reale della chiamata,
+    misurato dal chiamante) è essenziale per un grafico "al secondo"
+    corretto: senza di essa l'intero traffico risulterebbe concentrato
+    nell'istante in cui la scansione termina invece che diffuso sulla sua
+    reale durata. 'connections_out'/'connections_in' (vedi
+    nmap_conn_count.py) sono un conteggio approssimato per difetto via
+    polling psutil, non un valore esatto."""
     conn.execute(
-        """INSERT INTO traffic_log (recorded_at, source, packets_sent, bytes_sent, packets_rcvd, bytes_rcvd)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (_now(), source, packets_sent, bytes_sent, packets_rcvd, bytes_rcvd),
+        """INSERT INTO traffic_log
+               (recorded_at, source, packets_sent, bytes_sent, packets_rcvd, bytes_rcvd,
+                duration_seconds, connections_out, connections_in)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (_now(), source, packets_sent, bytes_sent, packets_rcvd, bytes_rcvd,
+         duration_seconds, connections_out, connections_in),
     )
     conn.commit()
 
 
 def traffic_summary(conn, since_minutes=60, bucket_minutes=2):
     """Ritorna {'total': {...}, 'series': [{'t', 'packets_sent', 'bytes_sent',
-    'packets_rcvd', 'bytes_rcvd'}, ...]}: 'total' è il cumulativo su tutto lo
-    storico (per il badge riepilogativo), 'series' raggruppa gli ultimi
-    since_minutes minuti in bucket da bucket_minutes minuti (per il grafico
-    dell'andamento recente, un punto = somma del bucket). Il binning è fatto
-    in Python (non con funzioni SQL di troncamento data, diverse fra SQLite
-    e Postgres) sulle righe già filtrate per data, coerente con come il
-    resto del progetto evita differenze di dialetto sulle date."""
+    'packets_rcvd', 'bytes_rcvd'}, ...], 'bucket_minutes'}: 'total' è il
+    cumulativo su tutto lo storico (per il badge riepilogativo); 'series'
+    copre gli ultimi since_minutes minuti in bucket continui da
+    bucket_minutes minuti (bucket senza traffico inclusi, a zero — il
+    grafico deve mostrare una linea temporale continua, non solo i punti
+    con dati).
+
+    Il traffico di OGNI riga viene distribuito PROPORZIONALMENTE su tutti i
+    bucket che il suo intervallo [recorded_at - duration_seconds,
+    recorded_at] attraversa, pesato per quanti secondi di sovrapposizione
+    ricadono in ciascun bucket — non accumulato per intero nel bucket
+    dell'istante finale. Senza questo, una scansione lenta/a basso effort
+    (T0-T2, --max-rate basso: può durare minuti o ore) apparirebbe come un
+    picco istantaneo invece del tasso basso e diffuso che rappresenta
+    davvero, il difetto opposto di quello che l'effort di rete dovrebbe
+    comunicare.
+
+    Il binning è fatto in Python (non con funzioni SQL di troncamento data,
+    diverse fra SQLite e Postgres), coerente con come il resto del progetto
+    evita differenze di dialetto sulle date."""
     total_row = conn.execute(
         "SELECT COALESCE(SUM(packets_sent),0) ps, COALESCE(SUM(bytes_sent),0) bs, "
-        "COALESCE(SUM(packets_rcvd),0) pr, COALESCE(SUM(bytes_rcvd),0) br FROM traffic_log"
+        "COALESCE(SUM(packets_rcvd),0) pr, COALESCE(SUM(bytes_rcvd),0) br, "
+        "COALESCE(SUM(connections_out),0) co, COALESCE(SUM(connections_in),0) ci FROM traffic_log"
     ).fetchone()
     total = {
         "packets_sent": total_row["ps"], "bytes_sent": total_row["bs"],
         "packets_rcvd": total_row["pr"], "bytes_rcvd": total_row["br"],
+        "connections_out": total_row["co"], "connections_in": total_row["ci"],
     }
 
-    since = (datetime.now() - timedelta(minutes=since_minutes)).isoformat(timespec="seconds")
+    now = datetime.now()
+    window_start = now - timedelta(minutes=since_minutes)
+    floored_minute = window_start.minute - (window_start.minute % bucket_minutes)
+    first_bucket_start = window_start.replace(minute=floored_minute, second=0, microsecond=0)
+
+    # Bucket pre-generati (a zero) per l'intera finestra, cosi il grafico ha
+    # una linea temporale continua invece di "buchi" nei periodi senza
+    # traffico registrato.
+    buckets = {}
+    cursor = first_bucket_start
+    while cursor <= now:
+        key = cursor.isoformat(timespec="minutes")
+        buckets[key] = {
+            "t": key, "packets_sent": 0.0, "bytes_sent": 0.0, "packets_rcvd": 0.0, "bytes_rcvd": 0.0,
+            "connections_out": 0.0, "connections_in": 0.0,
+        }
+        cursor += timedelta(minutes=bucket_minutes)
+
+    # Include anche righe iniziate PRIMA della finestra ma la cui durata si
+    # protrae al suo interno: un margine di 6 ore copre ampiamente anche le
+    # scansioni T0/T1 più lente viste in pratica in questo progetto.
+    fetch_since = (window_start - timedelta(hours=6)).isoformat(timespec="seconds")
     rows = conn.execute(
-        "SELECT recorded_at, packets_sent, bytes_sent, packets_rcvd, bytes_rcvd "
+        "SELECT recorded_at, packets_sent, bytes_sent, packets_rcvd, bytes_rcvd, duration_seconds, "
+        "connections_out, connections_in "
         "FROM traffic_log WHERE recorded_at >= ? ORDER BY recorded_at",
-        (since,),
+        (fetch_since,),
     ).fetchall()
 
-    buckets = {}
     for r in rows:
         try:
-            ts = datetime.fromisoformat(r["recorded_at"])
+            end_ts = datetime.fromisoformat(r["recorded_at"])
         except ValueError:
             continue
-        floored_minute = ts.minute - (ts.minute % bucket_minutes)
-        bucket_ts = ts.replace(minute=floored_minute, second=0, microsecond=0)
-        key = bucket_ts.isoformat(timespec="minutes")
-        b = buckets.setdefault(
-            key, {"t": key, "packets_sent": 0, "bytes_sent": 0, "packets_rcvd": 0, "bytes_rcvd": 0}
-        )
-        b["packets_sent"] += r["packets_sent"] or 0
-        b["bytes_sent"] += r["bytes_sent"] or 0
-        b["packets_rcvd"] += r["packets_rcvd"] or 0
-        b["bytes_rcvd"] += r["bytes_rcvd"] or 0
+        duration = max(r["duration_seconds"] or 0, 1)
+        start_ts = end_ts - timedelta(seconds=duration)
+        if end_ts < first_bucket_start:
+            continue  # finita prima dell'inizio della finestra, nessuna sovrapposizione
 
-    series = [buckets[k] for k in sorted(buckets)]
+        cursor = first_bucket_start
+        while cursor <= now:
+            bucket_end = cursor + timedelta(minutes=bucket_minutes)
+            overlap = (min(end_ts, bucket_end) - max(start_ts, cursor)).total_seconds()
+            if overlap > 0:
+                frac = overlap / duration
+                b = buckets[cursor.isoformat(timespec="minutes")]
+                b["packets_sent"] += (r["packets_sent"] or 0) * frac
+                b["bytes_sent"] += (r["bytes_sent"] or 0) * frac
+                b["packets_rcvd"] += (r["packets_rcvd"] or 0) * frac
+                b["bytes_rcvd"] += (r["bytes_rcvd"] or 0) * frac
+                b["connections_out"] += (r["connections_out"] or 0) * frac
+                b["connections_in"] += (r["connections_in"] or 0) * frac
+            cursor += timedelta(minutes=bucket_minutes)
+
+    series = []
+    for k in sorted(buckets):
+        b = buckets[k]
+        series.append({
+            "t": b["t"],
+            "packets_sent": round(b["packets_sent"], 2),
+            "bytes_sent": round(b["bytes_sent"], 2),
+            "packets_rcvd": round(b["packets_rcvd"], 2),
+            "bytes_rcvd": round(b["bytes_rcvd"], 2),
+            "connections_out": round(b["connections_out"], 2),
+            "connections_in": round(b["connections_in"], 2),
+        })
     return {"total": total, "series": series, "bucket_minutes": bucket_minutes}

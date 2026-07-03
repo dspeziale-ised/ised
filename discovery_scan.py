@@ -19,14 +19,17 @@ Uso:
 
 import argparse
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import nmap_proxy_client
+import scanner_db
 from job_lock import JobLock
 
 BASE = Path(__file__).parent
 LOCK_FILE = BASE / "discovery.lock"
+DEFAULT_DB_PATH = scanner_db.resolve_db_target(BASE / "instance" / "inventory.db")
 DEFAULT_BATCH_SIZE = 8
 DEFAULT_TIMEOUT = 900
 DEFAULT_TIMING = "4"
@@ -44,28 +47,54 @@ TOTAL_SUBNETS = 256
 TIMING_CHOICES = ("0", "1", "2", "3", "4", "5")
 
 
-def scan_subnet(subnet_id, output_dir, timeout=DEFAULT_TIMEOUT, timing=DEFAULT_TIMING, max_rate=None):
+def scan_subnet(subnet_id, output_dir, timeout=DEFAULT_TIMEOUT, timing=DEFAULT_TIMING, max_rate=None,
+                 db_path=None):
     """Esegue nmap -sn sulla subnet 10.<subnet_id>.0.0/16, scrive l'XML in
     output_dir. Ritorna (subnet_id, ok, errore_o_None). max_rate (pacchetti/
     secondo) è la leva pratica per una scansione discreta su un intero /16
     — riduce il traffico senza rendere la scansione impossibilmente lenta
-    come farebbero i timing template bassi."""
+    come farebbero i timing template bassi.
+
+    -v: fa stampare a nmap il riepilogo testuale "Raw packets sent/Rcvd",
+    usato per il traffico in dashboard (nessun effetto sull'XML, unica fonte
+    usata per il parsing). Ogni chiamata apre/chiude una propria connessione
+    al DB per registrarlo — scan_subnet gira in un ThreadPoolExecutor
+    (vedi run_discovery), una connessione condivisa fra thread non sarebbe
+    sicura; il costo di apertura per subnet è trascurabile rispetto alla
+    durata di una scansione /16."""
     xml_path = Path(output_dir) / f"scan_10.{subnet_id}.0.0.xml"
-    args = ["-sn", "-n", f"-T{timing}"]
+    args = ["-sn", "-n", "-v", f"-T{timing}"]
     if max_rate:
         args += ["--max-rate", str(max_rate)]
     args += [f"10.{subnet_id}.0.0/16", "-oX", str(xml_path)]
+    traffic_stats = None
+    connections_out = connections_in = 0
+    started_at = time.monotonic()
     try:
-        nmap_proxy_client.run_nmap(args, timeout=timeout)
-        return subnet_id, True, None
-    except subprocess.TimeoutExpired:
-        return subnet_id, False, "timeout"
+        result = nmap_proxy_client.run_nmap(args, timeout=timeout)
+        traffic_stats = nmap_proxy_client.parse_traffic_stats(result.stdout)
+        connections_out = getattr(result, "connections_out", 0)
+        connections_in = getattr(result, "connections_in", 0)
+        ok, error = True, None
+    except subprocess.TimeoutExpired as e:
+        traffic_stats = nmap_proxy_client.parse_traffic_stats(e.stdout if isinstance(e.stdout, str) else None)
+        ok, error = False, "timeout"
     except Exception as e:
-        return subnet_id, False, str(e)
+        ok, error = False, str(e)
+    duration = time.monotonic() - started_at
+
+    if traffic_stats and db_path:
+        conn = scanner_db.connect(db_path)
+        scanner_db.log_traffic(conn, "discovery", duration_seconds=duration,
+                                connections_out=connections_out, connections_in=connections_in, **traffic_stats)
+        conn.close()
+
+    return subnet_id, ok, error
 
 
 def run_discovery(output_dir, batch_size=DEFAULT_BATCH_SIZE, timeout=DEFAULT_TIMEOUT,
-                   timing=DEFAULT_TIMING, max_rate=None, subnet_ids=range(TOTAL_SUBNETS)):
+                   timing=DEFAULT_TIMING, max_rate=None, subnet_ids=range(TOTAL_SUBNETS),
+                   db_path=DEFAULT_DB_PATH):
     """Lancia il ping-sweep su tutte le subnet indicate con parallelismo
     limitato a batch_size. Ritorna {'ok': N, 'failed': N}."""
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -75,7 +104,7 @@ def run_discovery(output_dir, batch_size=DEFAULT_BATCH_SIZE, timeout=DEFAULT_TIM
 
     with ThreadPoolExecutor(max_workers=batch_size) as executor:
         futures = {
-            executor.submit(scan_subnet, i, output_dir, timeout, timing, max_rate): i
+            executor.submit(scan_subnet, i, output_dir, timeout, timing, max_rate, db_path): i
             for i in subnet_ids
         }
         for future in as_completed(futures):
@@ -106,6 +135,9 @@ def main():
                          help="Limite pacchetti/secondo (nmap --max-rate): riduce il traffico per "
                               "non affaticare firewall/IDS senza rendere la scansione "
                               "impraticabilmente lenta. Consigliato 50-150 per una scansione discreta")
+    parser.add_argument("--db", default=DEFAULT_DB_PATH,
+                         help="Percorso database SQLite, oppure URL postgresql://... (default: "
+                              "DATABASE_URL se impostata) - usato solo per registrare il traffico generato")
     args = parser.parse_args()
 
     with JobLock(LOCK_FILE):
@@ -113,7 +145,8 @@ def main():
         print(f"Avvio discovery XML su 10.0.0.0/8 ({TOTAL_SUBNETS} subnet /16), "
               f"batch size {args.batch_size}, timing -T{args.timing}{rate_desc}, "
               f"output in {args.output_dir}...", flush=True)
-        results = run_discovery(args.output_dir, args.batch_size, args.timeout, args.timing, args.max_rate)
+        results = run_discovery(args.output_dir, args.batch_size, args.timeout, args.timing, args.max_rate,
+                                 db_path=args.db)
         print(f"Completato: {results['ok']} OK, {results['failed']} fallite su {TOTAL_SUBNETS} subnet.")
 
 

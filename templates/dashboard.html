@@ -37,6 +37,25 @@
   </div>
 </div>
 
+<div class="card card-outline card-secondary mb-3">
+  <div class="card-header py-2">
+    <h3 class="card-title">
+      <i class="fas fa-network-wired"></i> Traffico scansioni
+    </h3>
+    <div class="card-tools">
+      <span class="badge badge-secondary mr-1" id="trafficSentBadge">Inviati: —</span>
+      <span class="badge badge-secondary" id="trafficRcvdBadge">Ricevuti: —</span>
+    </div>
+  </div>
+  <div class="card-body py-2">
+    <canvas id="trafficChart" style="max-height:130px"></canvas>
+    <p class="small text-muted mb-0 mt-1">
+      Byte/pacchetti al secondo generati dalle scansioni nmap dell'app (non tutto il traffico della
+      workstation), ultimi 60 minuti raggruppati in bucket da 2 minuti.
+    </p>
+  </div>
+</div>
+
 <div class="row">
   <div class="col-lg-3 col-6">
     <div class="small-box bg-info">
@@ -323,6 +342,50 @@ setInterval(refreshScanStatus, 5000);
 
 {% include "_jobs_script.html" %}
 initJobWidgets({ discovery: {}, rescan: {}, classify: {}, vuln: {}, attack: {}, customscan: {} });
+
+function formatBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+const trafficChart = new Chart(document.getElementById('trafficChart'), {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      { label: 'Byte/sec inviati', data: [], borderColor: '#e15759', backgroundColor: 'rgba(225,87,89,0.15)', tension: 0.3, fill: true, pointRadius: 0 },
+      { label: 'Byte/sec ricevuti', data: [], borderColor: '#4e79a7', backgroundColor: 'rgba(78,121,167,0.15)', tension: 0.3, fill: true, pointRadius: 0 },
+    ],
+  },
+  options: {
+    animation: false,
+    maintainAspectRatio: false,
+    scales: { y: { beginAtZero: true, ticks: { callback: (v) => formatBytes(v) } } },
+    plugins: { legend: { position: 'bottom', labels: { boxHeight: 8 } } },
+  },
+});
+
+function refreshTrafficStats() {
+  fetch('{{ url_for("api_traffic_stats") }}?since_minutes=60&bucket_minutes=2')
+    .then((r) => r.json())
+    .then((d) => {
+      document.getElementById('trafficSentBadge').textContent =
+        `Inviati: ${d.total.packets_sent.toLocaleString('it-IT')} pacchetti · ${formatBytes(d.total.bytes_sent)}`;
+      document.getElementById('trafficRcvdBadge').textContent =
+        `Ricevuti: ${d.total.packets_rcvd.toLocaleString('it-IT')} pacchetti · ${formatBytes(d.total.bytes_rcvd)}`;
+
+      const bucketSeconds = d.bucket_minutes * 60;
+      trafficChart.data.labels = d.series.map((b) => b.t.slice(11, 16));
+      trafficChart.data.datasets[0].data = d.series.map((b) => Math.round(b.bytes_sent / bucketSeconds));
+      trafficChart.data.datasets[1].data = d.series.map((b) => Math.round(b.bytes_rcvd / bucketSeconds));
+      trafficChart.update();
+    })
+    .catch(() => {});
+}
+
+refreshTrafficStats();
+setInterval(refreshTrafficStats, 15000);
 
 {% include "_effort_script.html" %}
 </script>

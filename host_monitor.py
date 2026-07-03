@@ -15,6 +15,8 @@ Uso:
 import argparse
 import subprocess
 import sys
+import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -55,25 +57,50 @@ def _parse_up_ips(xml_bytes):
 
 
 def ping_sweep(ips, timeout=120, timing=None):
-    """Esegue nmap -sn su un batch di IP, ritorna il set di IP risultati up.
-    'timing' (-T0..-T5) di default segue l'effort di rete globale
-    (scan_effort.py): il monitoraggio gira in automatico in background,
-    senza un form per sceglierlo scansione per scansione, quindi è l'unico
-    posto dove l'effort è letto direttamente invece di essere solo un
-    default pre-compilato in un form."""
+    """Esegue nmap -sn su un batch di IP, ritorna (set di IP risultati up,
+    stats traffico o None). 'timing' (-T0..-T5) di default segue l'effort di
+    rete globale (scan_effort.py): il monitoraggio gira in automatico in
+    background, senza un form per sceglierlo scansione per scansione, quindi
+    è l'unico posto dove l'effort è letto direttamente invece di essere solo
+    un default pre-compilato in un form.
+
+    L'XML va su un file temporaneo (non più '-oX -' direttamente): necessario
+    per poter aggiungere -v e recuperarne il riepilogo testuale "Raw packets
+    sent/Rcvd" (usato per il traffico in dashboard) via
+    nmap_proxy_client.parse_traffic_stats — con '-oX -' nmap sostituisce
+    interamente lo stdout con l'XML, sopprimendo quel testo."""
     if not ips:
-        return set()
+        return set(), None
     if timing is None:
         timing = scan_effort.current_profile()["monitor_timing"]
+
+    with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as f:
+        xml_path = Path(f.name)
+
+    traffic_stats = None
+    started_at = time.monotonic()
     try:
         result = nmap_proxy_client.run_nmap(
-            ["-sn", "-n", f"-T{timing}", "-oX", "-", *ips],
-            capture_output=True, text=False, timeout=timeout,
+            ["-sn", "-n", "-v", f"-T{timing}", "-oX", str(xml_path), *ips],
+            capture_output=True, text=True, timeout=timeout,
         )
-    except (subprocess.TimeoutExpired, OSError) as e:
-        print(f"  [!] Errore/timeout ping-sweep su batch di {len(ips)} host: {e}")
-        return set()
-    return _parse_up_ips(result.stdout)
+        traffic_stats = nmap_proxy_client.parse_traffic_stats(result.stdout)
+        if traffic_stats:
+            traffic_stats["connections_out"] = getattr(result, "connections_out", 0)
+            traffic_stats["connections_in"] = getattr(result, "connections_in", 0)
+    except subprocess.TimeoutExpired as e:
+        print(f"  [!] Timeout ping-sweep su batch di {len(ips)} host: {e}")
+        traffic_stats = nmap_proxy_client.parse_traffic_stats(e.stdout if isinstance(e.stdout, str) else None)
+    except OSError as e:
+        print(f"  [!] Errore ping-sweep su batch di {len(ips)} host: {e}")
+    if traffic_stats:
+        traffic_stats["duration_seconds"] = time.monotonic() - started_at
+
+    up_ips = set()
+    if xml_path.exists():
+        up_ips = _parse_up_ips(xml_path.read_bytes())
+        xml_path.unlink(missing_ok=True)
+    return up_ips, traffic_stats
 
 
 def run_monitor_cycle(conn, batch_size=DEFAULT_BATCH_SIZE, heartbeat_minutes=DEFAULT_HEARTBEAT_MINUTES):
@@ -86,7 +113,9 @@ def run_monitor_cycle(conn, batch_size=DEFAULT_BATCH_SIZE, heartbeat_minutes=DEF
 
     for i in range(0, len(hosts), batch_size):
         batch = hosts[i:i + batch_size]
-        up_ips = ping_sweep([h["ip"] for h in batch], timing=timing)
+        up_ips, traffic_stats = ping_sweep([h["ip"] for h in batch], timing=timing)
+        if traffic_stats:
+            scanner_db.log_traffic(conn, "monitor", **traffic_stats)
         for h in batch:
             status = "up" if h["ip"] in up_ips else "down"
             if status == "up":
