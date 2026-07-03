@@ -19,7 +19,6 @@ import nmap_proxy_client
 
 HTTP_PORTS = {80, 443, 8080, 8443, 8000, 8888, 10000, 10001, 5000, 5001}
 
-
 def grab_http_banner(ip, port, timeout=5, use_https=None):
     """GET la radice del servizio web e ritorna status/header/title/snippet."""
     if use_https is None:
@@ -56,7 +55,6 @@ def grab_http_banner(ip, port, timeout=5, use_https=None):
     except Exception as e:
         return {"error": str(e)}
 
-
 def grab_tcp_banner(ip, port, timeout=3, probe=b""):
     """Connessione TCP grezza: utile per porte 'tcpwrapped' non identificate da nmap."""
     try:
@@ -70,7 +68,6 @@ def grab_tcp_banner(ip, port, timeout=3, probe=b""):
         return {"banner": "", "note": "connesso ma nessun dato ricevuto (timeout)"}
     except Exception as e:
         return {"error": str(e)}
-
 
 def enum_smb_shares(ip, timeout=30):
     """Usa gli script NSE di nmap per enumerare condivisioni SMB e info SMB/OS."""
@@ -96,7 +93,6 @@ def enum_smb_shares(ip, timeout=30):
         return {"error": "output nmap non valido"}
     except Exception as e:
         return {"error": str(e)}
-
 
 def enrich_host(ip, services):
     """Raccoglie le evidenze extra pertinenti in base alle porte/servizi noti.

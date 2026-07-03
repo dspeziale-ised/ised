@@ -113,6 +113,9 @@
           <div class="col-md-3">
             <label class="small text-muted mb-1">Timing nmap</label>
             <select class="form-control form-control-sm" id="discoveryTiming">
+              <option value="0" {{ 'selected' if effort_profile.discovery_timing == '0' else '' }}>T0 - Paranoid (rischio: può non completare mai su un /8)</option>
+              <option value="1" {{ 'selected' if effort_profile.discovery_timing == '1' else '' }}>T1 - Sneaky (rischio: molto lento su un /8)</option>
+              <option value="2" {{ 'selected' if effort_profile.discovery_timing == '2' else '' }}>T2 - Polite (rischio: molto lento su un /8)</option>
               <option value="3" {{ 'selected' if effort_profile.discovery_timing == '3' else '' }}>T3 - Normal</option>
               <option value="4" {{ 'selected' if effort_profile.discovery_timing == '4' else '' }}>T4 - Aggressive (default)</option>
               <option value="5" {{ 'selected' if effort_profile.discovery_timing == '5' else '' }}>T5 - Insane (massima velocità, molto invasivo)</option>
@@ -134,13 +137,19 @@
           </div>
         </div>
         <p class="small text-muted">
-          <i class="fas fa-circle-info"></i> Per una scansione discreta la leva giusta è
-          <strong>Max pacchetti/sec</strong> (es. 50-150): riduce il traffico senza far esplodere i
-          tempi. <strong>T0/T1/T2 non sono disponibili qui</strong>: su un intero /16 (65536
-          indirizzi) impiegano ore/giorni per subnet, verificato — usa il limite di pacchetti/sec
-          invece. Anche "Job paralleli" più basso rende la scansione più discreta (meno subnet
-          toccate insieme).
+          <i class="fas fa-circle-info"></i> Per una scansione discreta <strong>che completi
+          comunque</strong> la leva giusta è <strong>Max pacchetti/sec</strong> (es. 50-150): riduce
+          il traffico senza far esplodere i tempi. Anche "Job paralleli" più basso rende la
+          scansione più discreta (meno subnet toccate insieme).
         </p>
+        <div class="alert alert-danger small">
+          <i class="fas fa-triangle-exclamation"></i>
+          <strong>T0/T1/T2 sono impraticabili su un'intera 10.0.0.0/8</strong> (256 subnet /16, 65536
+          indirizzi ciascuna): verificato che serializzano le probe con un ritardo fisso talmente
+          alto che una singola subnet può impiegare ore, giorni o non completare mai. Selezionali
+          solo se hai già scelto di dare priorità assoluta alla discrezione rispetto al fatto che la
+          discovery finisca in un tempo utile.
+        </div>
         <button class="btn btn-warning job-start-btn mb-3" data-job="discovery" {{ 'disabled' if jobs_running.discovery else '' }}>
           <i class="fas fa-play"></i> Avvia discovery
         </button>

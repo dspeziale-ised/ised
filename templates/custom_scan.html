@@ -57,6 +57,46 @@
   <div class="card-body" id="customscanOptions">
 
     <div class="cs-section">
+      <h6 class="text-primary"><i class="fas fa-bookmark"></i> Template di scansione</h6>
+      <div class="form-row align-items-end">
+        <div class="col-md-6">
+          <label class="small text-muted mb-1">Template salvati</label>
+          <select class="form-control form-control-sm cs-template-control" id="customscanTemplateSelect">
+            <option value="">-- seleziona un template --</option>
+            {% for t in templates %}
+            <option value="{{ t.name }}">{{ t.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-6">
+          <button type="button" class="btn btn-outline-primary btn-sm" id="customscanTemplateLoadBtn">
+            <i class="fas fa-download"></i> Carica
+          </button>
+          <button type="button" class="btn btn-outline-danger btn-sm" id="customscanTemplateDeleteBtn">
+            <i class="fas fa-trash"></i> Elimina
+          </button>
+        </div>
+      </div>
+      <div class="form-row mt-2 align-items-end">
+        <div class="col-md-6">
+          <label class="small text-muted mb-1">Nome nuovo template</label>
+          <input type="text" class="form-control form-control-sm cs-template-control" id="customscanTemplateName"
+                 placeholder="es. Scan rapido web server">
+        </div>
+        <div class="col-md-6">
+          <button type="button" class="btn btn-outline-success btn-sm" id="customscanTemplateSaveBtn">
+            <i class="fas fa-save"></i> Salva come template
+          </button>
+        </div>
+      </div>
+      <p class="small text-muted mb-0 mt-2">
+        "Salva" registra il target e tutte le opzioni impostate qui sotto (il comando risultante in
+        fondo alla pagina) con il nome indicato, sovrascrivendo un template esistente con lo stesso
+        nome. "Carica" applica un template azzerando prima le altre opzioni del form.
+      </p>
+    </div>
+
+    <div class="cs-section">
       <h6 class="text-primary"><i class="fas fa-crosshairs"></i> Target</h6>
       <div class="form-row">
         <div class="col-md-8">
@@ -414,6 +454,91 @@ function customscanComputeArgs() {
 document.getElementById('customscanOptions').addEventListener('input', customscanComputeArgs);
 document.getElementById('customscanOptions').addEventListener('change', customscanComputeArgs);
 customscanComputeArgs();
+
+let customscanTemplates = {{ templates|tojson }};
+
+function customscanRenderTemplateOptions() {
+  const sel = document.getElementById('customscanTemplateSelect');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">-- seleziona un template --</option>';
+  customscanTemplates.forEach(function (t) {
+    const opt = document.createElement('option');
+    opt.value = t.name;
+    opt.textContent = t.name;
+    sel.appendChild(opt);
+  });
+  if (customscanTemplates.some(function (t) { return t.name === current; })) sel.value = current;
+}
+
+function customscanRefreshTemplates() {
+  return fetch("{{ url_for('api_nmap_scan_templates') }}")
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      customscanTemplates = d.templates || [];
+      customscanRenderTemplateOptions();
+    })
+    .catch(function () {});
+}
+
+document.getElementById('customscanTemplateLoadBtn').addEventListener('click', function () {
+  const name = document.getElementById('customscanTemplateSelect').value;
+  const tpl = customscanTemplates.find(function (t) { return t.name === name; });
+  if (!tpl) { alert('Seleziona un template da caricare.'); return; }
+
+  // Azzera tutte le opzioni discrete del form (tranne i controlli dei
+  // template stessi, marcati con la classe cs-template-control) prima di
+  // applicare il template: l'intero target/args salvato sostituisce lo
+  // stato corrente invece di combinarsi con esso (evita, es., un -T
+  // duplicato tra un controllo discreto rimasto impostato e quello dentro
+  // il template salvato).
+  document.querySelectorAll('#customscanOptions input[type=checkbox]').forEach(function (el) {
+    el.checked = false;
+  });
+  document.querySelectorAll('#customscanOptions select:not(.cs-template-control)').forEach(function (el) {
+    el.value = '';
+  });
+  document.querySelectorAll(
+    '#customscanOptions input[type=text]:not(.cs-template-control), #customscanOptions input[type=number]'
+  ).forEach(function (el) { el.value = ''; });
+
+  document.getElementById('customscanTarget').value = tpl.target || '';
+  document.getElementById('customscanExtraArgs').value = tpl.args || '';
+  customscanComputeArgs();
+});
+
+document.getElementById('customscanTemplateDeleteBtn').addEventListener('click', function () {
+  const name = document.getElementById('customscanTemplateSelect').value;
+  if (!name) { alert('Seleziona un template da eliminare.'); return; }
+  if (!confirm('Eliminare il template "' + name + '"?')) return;
+  fetch("{{ url_for('api_nmap_scan_templates') }}/" + encodeURIComponent(name), { method: 'DELETE' })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d.ok) { alert(d.reason || 'Non eliminato.'); return; }
+      customscanTemplates = d.templates;
+      customscanRenderTemplateOptions();
+    })
+    .catch(function () { alert('Errore di rete.'); });
+});
+
+document.getElementById('customscanTemplateSaveBtn').addEventListener('click', function () {
+  const name = document.getElementById('customscanTemplateName').value.trim();
+  if (!name) { alert('Indica un nome per il template.'); return; }
+  customscanComputeArgs();
+  const body = new URLSearchParams();
+  body.set('name', name);
+  body.set('target', document.getElementById('customscanTarget').value.trim());
+  body.set('args', document.getElementById('customscanArgsPreview').value);
+  fetch("{{ url_for('api_nmap_scan_templates') }}", { method: 'POST', body: body })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d.ok) { alert(d.reason || 'Non salvato.'); return; }
+      document.getElementById('customscanTemplateName').value = '';
+      customscanTemplates = d.templates;
+      customscanRenderTemplateOptions();
+      document.getElementById('customscanTemplateSelect').value = name;
+    })
+    .catch(function () { alert('Errore di rete.'); });
+});
 
 initJobWidgets({
   customscan: { forceCheckbox: null, fields: [

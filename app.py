@@ -23,6 +23,7 @@ import notify_telegram
 import report_generator
 import report_schedule
 import scan_effort
+import scan_templates
 import scanner_db
 
 BASE_DIR = Path(__file__).parent
@@ -1254,7 +1255,26 @@ def nmap_scan_page():
         "custom_scan.html",
         job_running=is_job_running("customscan"),
         effort_profile=scan_effort.current_profile(),
+        templates=scan_templates.list_templates(),
     )
+
+
+@app.route("/api/nmap-scan-templates", methods=["GET", "POST"])
+def api_nmap_scan_templates():
+    if request.method == "POST":
+        name = (request.form.get("name") or "").strip()
+        if not name:
+            return jsonify({"ok": False, "reason": "Indica un nome per il template."}), 400
+        scan_templates.save_template(name, request.form.get("target"), request.form.get("args"))
+    return jsonify({"ok": True, "templates": scan_templates.list_templates()})
+
+
+@app.route("/api/nmap-scan-templates/<name>", methods=["DELETE"])
+def api_nmap_scan_template_delete(name):
+    deleted = scan_templates.delete_template(name)
+    if not deleted:
+        return jsonify({"ok": False, "reason": "Template non trovato."}), 404
+    return jsonify({"ok": True, "templates": scan_templates.list_templates()})
 
 
 @app.route("/attack-matrix")

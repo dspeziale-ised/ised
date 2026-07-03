@@ -99,8 +99,9 @@ def main():
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT,
                          help="Timeout per singola subnet in secondi (default 900)")
     parser.add_argument("--timing", default=DEFAULT_TIMING, choices=list(TIMING_CHOICES),
-                         help="Timing template nmap -T3..-T5 (default 4). -T0/-T1/-T2 non sono "
-                              "praticabili su un intero /16 (vedi --max-rate per una scansione discreta)")
+                         help="Timing template nmap -T0..-T5 (default 4). -T0/-T1/-T2 sono "
+                              "impraticabili nella maggior parte dei casi su un intero /16 (vedi "
+                              "--max-rate per una scansione discreta che completi comunque)")
     parser.add_argument("--max-rate", type=int, default=None,
                          help="Limite pacchetti/secondo (nmap --max-rate): riduce il traffico per "
                               "non affaticare firewall/IDS senza rendere la scansione "
