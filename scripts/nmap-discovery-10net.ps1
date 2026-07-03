@@ -12,20 +12,28 @@
 .PARAMETER NmapPath
     Percorso dell'eseguibile nmap (default: cerca nel PATH).
 .PARAMETER Timing
-    Timing template nmap -T0..-T5 (default 3 = normale). Valori bassi
-    (0-2) riducono il rate di pacchetti/probe per non affaticare
-    firewall/IDS, a costo di una scansione più lenta.
+    Timing template nmap -T3..-T5 (default 4 = aggressive). -T0/-T1/-T2
+    NON sono praticabili qui: serializzano le probe con un ritardo fisso
+    per host (T1 ~15s, T2 ~0.4s) che su un /16 (65536 indirizzi) significa
+    ore/giorni per singola subnet (verificato). Per una scansione discreta
+    usa -MaxRate, non un timing basso.
+.PARAMETER MaxRate
+    Limite pacchetti/secondo (nmap --max-rate). Riduce il traffico per non
+    affaticare firewall/IDS SENZA rendere la scansione impraticabile come
+    farebbe un timing basso — 50-150 è un buon compromesso per una
+    scansione discreta di un /16 (default: nessun limite).
 .EXAMPLE
     .\nmap-discovery-10net.ps1
 .EXAMPLE
-    .\nmap-discovery-10net.ps1 -BatchSize 16 -OutputDir C:\scans -Timing 2
+    .\nmap-discovery-10net.ps1 -BatchSize 4 -OutputDir C:\scans -MaxRate 100
 #>
 param (
     [int]$BatchSize    = 16,
     [string]$OutputDir = ".\nmap_xml",
     [string]$NmapPath  = "nmap",
-    [ValidateRange(0,5)]
-    [int]$Timing       = 3
+    [ValidateSet(3,4,5)]
+    [int]$Timing       = 4,
+    [int]$MaxRate      = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -58,15 +66,19 @@ $OutputDir = (Resolve-Path $OutputDir).Path
 Write-Host "Nmap:       $nmapExe"   -ForegroundColor Cyan
 Write-Host "Batch size: $BatchSize" -ForegroundColor Cyan
 Write-Host "Timing:     -T$Timing" -ForegroundColor Cyan
+if ($MaxRate -gt 0) { Write-Host "Max rate:   $MaxRate pkt/s" -ForegroundColor Cyan }
 Write-Host "Output:     $OutputDir" -ForegroundColor Cyan
 Write-Host "Avvio discovery XML su 10.0.0.0/8 (256 subnet /16)..." -ForegroundColor Cyan
 
 # --- 4. Blocco eseguito da ogni job ---
 $scanBlock = {
-    param($id, $outDir, $nmapExe, $timing)
+    param($id, $outDir, $nmapExe, $timing, $maxRate)
     $xmlFile = Join-Path $outDir ("scan_10.{0}.0.0.xml" -f $id)
+    $nmapArgs = @("-sn", "-n", "-T$timing")
+    if ($maxRate -gt 0) { $nmapArgs += @("--max-rate", "$maxRate") }
+    $nmapArgs += @(("10.{0}.0.0/16" -f $id), "-oX", $xmlFile)
     # 2>&1: cattura anche stderr, cosi eventuali errori di nmap tornano nel job
-    & $nmapExe -sn -n "-T$timing" ("10.{0}.0.0/16" -f $id) -oX $xmlFile 2>&1
+    & $nmapExe @nmapArgs 2>&1
 }
 
 # --- 5. Throttle "rolling": mantiene sempre al massimo $BatchSize job attivi ---
@@ -94,7 +106,7 @@ for ($id = 131; $id -lt $total; $id++) {
 
     Start-Job -Name ("{0}_{1}" -f $jobPrefix, $id) `
               -ScriptBlock $scanBlock `
-              -ArgumentList $id, $OutputDir, $nmapExe, $Timing | Out-Null
+              -ArgumentList $id, $OutputDir, $nmapExe, $Timing, $MaxRate | Out-Null
 
     Write-Host ("[{0,3}/{1}] avviato scan 10.{2}.0.0/16" -f ($id + 1), $total, $id) `
         -ForegroundColor DarkGray

@@ -490,25 +490,31 @@ def admin_panel():
 JOB_FORCE_FLAG = {"attack": "--update-matrix"}
 
 
-DISCOVERY_TIMING_CHOICES = {"0", "1", "2", "3", "4", "5"}
+# -T0/-T1/-T2 serializzano le probe con un ritardo FISSO per host (verificato
+# empiricamente: -T2 non completa un solo /16 in 120s, -T1 impiegherebbe ore).
+# Su un intero /16 (65536 indirizzi) sono impraticabili — la leva giusta per
+# una discovery "silenziosa" è max_rate (pacchetti/secondo complessivi), non
+# il timing template: per questo il form accetta solo T3/T4/T5.
+DISCOVERY_TIMING_CHOICES = {"3", "4", "5"}
 RESCAN_TIMING_CHOICES = {"1", "2", "3", "4", "5"}
 
 
 def build_discovery_args(values):
     """Costruisce gli argomenti CLI per il job discovery dai campi del form
-    (BatchSize/OutputDir/NmapPath/Timing). Di default scrive gli XML
+    (BatchSize/OutputDir/NmapPath/Timing/MaxRate). Di default scrive gli XML
     direttamente in data/, cosi il job 'rescan' successivo li trova senza
     passaggi manuali. Il formato dei flag dipende da quale script è attivo
     (vedi USE_PYTHON_DISCOVERY): PowerShell (nativo) o discovery_scan.py
-    (container). 'timing' (-T0..-T5, default 3) controlla l'aggressività
-    del ping-sweep: valori bassi per non affaticare firewall/IDS, a costo
-    di una scansione più lenta — il numero di thread/subnet in parallelo
-    resta invece controllato da 'batch_size'."""
+    (container). Per una scansione discreta la leva pratica è 'max_rate'
+    (pacchetti/secondo, es. 50-150) — il timing template (T3-T5) e il
+    numero di thread/subnet in parallelo ('batch_size') restano comunque
+    configurabili ma T0-T2 non sono ammessi (impraticabili su un /16)."""
     output_dir = (values.get("output_dir") or "").strip() or str(DATA_DIR)
     batch_size = values.get("batch_size", type=int)
     timing = (values.get("timing") or "").strip()
     if timing not in DISCOVERY_TIMING_CHOICES:
         timing = None
+    max_rate = values.get("max_rate", type=int)
 
     if USE_PYTHON_DISCOVERY:
         args = ["--output-dir", output_dir]
@@ -516,6 +522,8 @@ def build_discovery_args(values):
             args += ["--batch-size", str(batch_size)]
         if timing:
             args += ["--timing", timing]
+        if max_rate and max_rate > 0:
+            args += ["--max-rate", str(max_rate)]
         return args
 
     args = []
@@ -524,6 +532,8 @@ def build_discovery_args(values):
     args += ["-OutputDir", output_dir]
     if timing:
         args += ["-Timing", timing]
+    if max_rate and max_rate > 0:
+        args += ["-MaxRate", str(max_rate)]
     nmap_path = (values.get("nmap_path") or "").strip()
     if nmap_path:
         args += ["-NmapPath", nmap_path]

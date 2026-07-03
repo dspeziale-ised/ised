@@ -87,30 +87,35 @@
             <input type="number" min="1" max="64" step="1" class="form-control form-control-sm" id="discoveryBatchSize" value="8">
           </div>
           <div class="col-md-3">
-            <label class="small text-muted mb-1">Effort / Timing nmap</label>
+            <label class="small text-muted mb-1">Timing nmap</label>
             <select class="form-control form-control-sm" id="discoveryTiming">
-              <option value="0">T0 - Paranoid (minimo impatto, molto lento)</option>
-              <option value="1">T1 - Sneaky (basso impatto)</option>
-              <option value="2">T2 - Polite (impatto ridotto, consigliato per firewall sensibili)</option>
-              <option value="3" selected>T3 - Normal (default nmap)</option>
-              <option value="4">T4 - Aggressive (veloce)</option>
+              <option value="3">T3 - Normal</option>
+              <option value="4" selected>T4 - Aggressive (default)</option>
               <option value="5">T5 - Insane (massima velocità, molto invasivo)</option>
             </select>
+          </div>
+          <div class="col-md-3">
+            <label class="small text-muted mb-1">Max pacchetti/sec (0 = nessun limite)</label>
+            <input type="number" min="0" step="10" class="form-control form-control-sm" id="discoveryMaxRate" value="0" placeholder="es. 100">
           </div>
           <div class="col-md-3">
             <label class="small text-muted mb-1">Cartella output XML</label>
             <input type="text" class="form-control form-control-sm" id="discoveryOutputDir" value="{{ data_dir }}">
           </div>
+        </div>
+        <div class="form-row mb-2">
           <div class="col-md-3">
             <label class="small text-muted mb-1">Percorso nmap (opzionale)</label>
             <input type="text" class="form-control form-control-sm" id="discoveryNmapPath" placeholder="nmap">
           </div>
         </div>
         <p class="small text-muted">
-          <i class="fas fa-circle-info"></i> "Effort" abbassa il rate di pacchetti/probe per non
-          affaticare firewall/IDS (a costo di una scansione più lenta); "Job paralleli" controlla
-          invece quante subnet vengono scansionate contemporaneamente. Riduci entrambi per una
-          scansione più discreta.
+          <i class="fas fa-circle-info"></i> Per una scansione discreta la leva giusta è
+          <strong>Max pacchetti/sec</strong> (es. 50-150): riduce il traffico senza far esplodere i
+          tempi. <strong>T0/T1/T2 non sono disponibili qui</strong>: su un intero /16 (65536
+          indirizzi) impiegano ore/giorni per subnet, verificato — usa il limite di pacchetti/sec
+          invece. Anche "Job paralleli" più basso rende la scansione più discreta (meno subnet
+          toccate insieme).
         </p>
         <button class="btn btn-warning job-start-btn mb-3" data-job="discovery" {{ 'disabled' if jobs_running.discovery else '' }}>
           <i class="fas fa-play"></i> Avvia discovery
@@ -455,6 +460,7 @@ initJobWidgets({
     { id: 'discoveryOutputDir', param: 'output_dir' },
     { id: 'discoveryNmapPath', param: 'nmap_path' },
     { id: 'discoveryTiming', param: 'timing' },
+    { id: 'discoveryMaxRate', param: 'max_rate' },
   ] },
   rescan: { forceCheckbox: null, fields: [
     { id: 'rescanTiming', param: 'timing' },
