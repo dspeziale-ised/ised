@@ -12,11 +12,14 @@
 .PARAMETER NmapPath
     Percorso dell'eseguibile nmap (default: cerca nel PATH).
 .PARAMETER Timing
-    Timing template nmap -T3..-T5 (default 4 = aggressive). -T0/-T1/-T2
-    NON sono praticabili qui: serializzano le probe con un ritardo fisso
-    per host (T1 ~15s, T2 ~0.4s) che su un /16 (65536 indirizzi) significa
-    ore/giorni per singola subnet (verificato). Per una scansione discreta
-    usa -MaxRate, non un timing basso.
+    Timing template nmap -T0..-T5 (default 4 = aggressive). -T0/-T1/-T2
+    sono impraticabili nella maggior parte dei casi: serializzano le probe
+    con un ritardo fisso per host (T1 ~15s, T2 ~0.4s, T0 ancora più lento)
+    che su un /16 (65536 indirizzi) significa ore/giorni per singola subnet
+    (verificato) — restano selezionabili solo per chi accetta questo
+    rischio esplicitamente (es. profilo 'low' di scan_effort.py). Per una
+    scansione discreta che completi comunque, usa -MaxRate invece di un
+    timing basso.
 .PARAMETER MaxRate
     Limite pacchetti/secondo (nmap --max-rate). Riduce il traffico per non
     affaticare firewall/IDS SENZA rendere la scansione impraticabile come
@@ -31,7 +34,7 @@ param (
     [int]$BatchSize    = 16,
     [string]$OutputDir = ".\nmap_xml",
     [string]$NmapPath  = "nmap",
-    [ValidateSet(3,4,5)]
+    [ValidateSet(0,1,2,3,4,5)]
     [int]$Timing       = 4,
     [int]$MaxRate      = 0
 )

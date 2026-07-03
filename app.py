@@ -513,11 +513,15 @@ JOB_FORCE_FLAG = {"attack": "--update-matrix"}
 
 
 # -T0/-T1/-T2 serializzano le probe con un ritardo FISSO per host (verificato
-# empiricamente: -T2 non completa un solo /16 in 120s, -T1 impiegherebbe ore).
-# Su un intero /16 (65536 indirizzi) sono impraticabili — la leva giusta per
-# una discovery "silenziosa" è max_rate (pacchetti/secondo complessivi), non
-# il timing template: per questo il form accetta solo T3/T4/T5.
-DISCOVERY_TIMING_CHOICES = {"3", "4", "5"}
+# empiricamente: -T2 non completa un solo /16 in 120s, -T1 impiegherebbe ore,
+# -T0 è ancora più lento). Su un intero /16 (65536 indirizzi) sono
+# impraticabili nella stragrande maggioranza dei casi — la leva giusta per
+# una discovery "silenziosa" resta max_rate (pacchetti/secondo complessivi),
+# non il timing template. Restano comunque selezionabili (su richiesta
+# esplicita, es. profilo 'low' di scan_effort.py) per chi accetta tempi
+# lunghissimi/scansioni potenzialmente mai completate pur di restare al
+# timing minimo: la UI segnala chiaramente il rischio.
+DISCOVERY_TIMING_CHOICES = {"0", "1", "2", "3", "4", "5"}
 RESCAN_TIMING_CHOICES = {"1", "2", "3", "4", "5"}
 
 
@@ -528,9 +532,10 @@ def build_discovery_args(values):
     passaggi manuali. Il formato dei flag dipende da quale script è attivo
     (vedi USE_PYTHON_DISCOVERY): PowerShell (nativo) o discovery_scan.py
     (container). Per una scansione discreta la leva pratica è 'max_rate'
-    (pacchetti/secondo, es. 50-150) — il timing template (T3-T5) e il
-    numero di thread/subnet in parallelo ('batch_size') restano comunque
-    configurabili ma T0-T2 non sono ammessi (impraticabili su un /16)."""
+    (pacchetti/secondo, es. 50-150); il timing template (T0-T5) e il numero
+    di thread/subnet in parallelo ('batch_size') sono anch'essi
+    configurabili, ma T0-T2 restano impraticabili su un /16 nella maggior
+    parte dei casi (vedi commento sopra)."""
     profile = scan_effort.current_profile()
     output_dir = (values.get("output_dir") or "").strip() or str(DATA_DIR)
     batch_size = values.get("batch_size", type=int)

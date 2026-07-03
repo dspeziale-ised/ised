@@ -25,20 +25,25 @@ CONFIG_FILE = "scan_effort.json"
 LEVELS = ("low", "normal", "fast")
 DEFAULT_LEVEL = "normal"
 
-# -T0/-T1/-T2 sono impraticabili per un ping-sweep dell'intero 10.0.0.0/8
-# (verificato altrove nel progetto): per 'low' la leva reale è max_rate,
-# non il timing template, che resta comunque a un valore prudente (T2/T3).
+# ATTENZIONE -T0/-T1/-T2 su Discovery: verificato altrove nel progetto che
+# sono impraticabili su un ping-sweep dell'intera 10.0.0.0/8 (256 subnet
+# /16, 65536 indirizzi ciascuna) — con T0 una singola subnet può non
+# completare mai in un tempo ragionevole. Il profilo 'low' li usa comunque
+# su richiesta esplicita dell'utente (priorità assoluta alla discrezione
+# anche a costo di tempi lunghissimi/scansioni che non completano): la leva
+# più efficace per restare praticabili resta comunque max_rate.
 PROFILES = {
     "low": {
         "level": "low",
         "label": "Debole",
         "description": (
-            "Minimo impatto su firewall/IDS: timing basso, pacchetti/sec limitati, poco "
-            "parallelismo. Le scansioni durano più a lungo ma passano più inosservate."
+            "Minimo impatto su firewall/IDS: timing T0, pacchetti/sec molto limitati, poco "
+            "parallelismo. Attenzione: con T0 una discovery sull'intera 10.0.0.0/8 può non "
+            "completare mai in un tempo ragionevole (vedi guida nella tab Discovery)."
         ),
-        "discovery_timing": "3",
-        "discovery_max_rate": 100,
-        "discovery_batch_size": 4,
+        "discovery_timing": "0",
+        "discovery_max_rate": 20,
+        "discovery_batch_size": 2,
         "rescan_timing": "2",
         "rescan_top_ports": 100,
         "monitor_timing": "2",

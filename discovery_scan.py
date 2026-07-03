@@ -33,13 +33,15 @@ DEFAULT_TIMING = "4"
 TOTAL_SUBNETS = 256
 
 # -T0/-T1/-T2 serializzano le probe con un ritardo FISSO per host (T1 =
-# ~15s, T2 = ~0.4s): su un /16 (65536 indirizzi) questo significa ORE o
-# GIORNI per singola subnet, verificato empiricamente (T2 non ha completato
-# un solo /16 in 120s). Per una discovery "silenziosa" su un intero /16 lo
-# strumento giusto è --max-rate (limite pacchetti/secondo complessivo, che
-# non esplode col numero di indirizzi), non il timing template — per questo
-# qui si accettano solo T3/T4/T5, quelli con parallelismo dinamico.
-TIMING_CHOICES = ("3", "4", "5")
+# ~15s, T2 = ~0.4s, T0 ancora più lento): su un /16 (65536 indirizzi) questo
+# significa ORE o GIORNI per singola subnet, verificato empiricamente (T2
+# non ha completato un solo /16 in 120s). Per una discovery "silenziosa" su
+# un intero /16 lo strumento giusto resta --max-rate (limite pacchetti/
+# secondo complessivo, che non esplode col numero di indirizzi), non il
+# timing template. T0-T2 restano comunque accettati su richiesta esplicita
+# (vedi scan_effort.py, profilo 'low'): chi li sceglie accetta che la
+# discovery possa non completare mai in un tempo ragionevole.
+TIMING_CHOICES = ("0", "1", "2", "3", "4", "5")
 
 
 def scan_subnet(subnet_id, output_dir, timeout=DEFAULT_TIMEOUT, timing=DEFAULT_TIMING, max_rate=None):
