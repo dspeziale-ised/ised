@@ -239,9 +239,15 @@ file) accetta target e argomenti nmap **arbitrari**, costruiti dal form
 (`templates/custom_scan.html`, che espone quasi tutte le categorie di
 opzioni nmap via JS in un'unica stringa `args`, più un campo di argomenti
 extra per qualunque flag non coperto esplicitamente) o passati a mano da
-CLI. Pipeline identica a `scan_and_store.py`: `nmap_proxy_client.run_nmap`
-→ `nmap_parser.parse_nmap_xml` → `classify.classify_device` →
-`scanner_db.upsert_host` → `scanner_db.log_scan`. Flag di output/input file
+CLI. Usa la stessa pipeline di `scan_and_store.py` (run nmap → parse XML →
+classifica → upserta host → log scan), estratta in `scan_pipeline.py` per
+non duplicarla identica nei due script: `scan_pipeline.run_and_store(cmd,
+xml_out, conn, ...)` esegue `nmap_proxy_client.run_nmap`, poi
+`nmap_parser.parse_nmap_xml`, `classify.classify_device`,
+`scanner_db.upsert_host` per ogni host 'up' e infine `scanner_db.log_scan`
+— non solleva per timeout/errori nmap o XML troncato, li registra come
+stato del batch e prosegue con l'XML parziale eventualmente già scritto.
+Flag di output/input file
 (`-oX`/`-oN`/`-oG`/`-oA`/`-iL`) digitati per errore negli argomenti extra
 vengono rimossi prima di aggiungere il proprio `-oX` obbligatorio, per
 evitare conflitti con nmap (non accetta due `-oX`).
@@ -249,8 +255,11 @@ evitare conflitti con nmap (non accetta due `-oX`).
 ## Effort di rete globale
 
 `scan_effort.py`: tre profili (`low`="Debole", `normal`="Normale",
-`fast`="Fast", persistiti come stringa in `instance/scan_effort.json`,
-stesso pattern/posto di `monitor_schedule.py`/`report_schedule.py`), ognuno
+`fast`="Fast", persistiti come stringa in `instance/scan_effort.json`
+tramite `json_settings.py` — lo stesso modulo di load/save-con-default usato
+da `monitor_schedule.py`/`report_schedule.py`, centralizzato per non
+duplicare la stessa logica di merge/tolleranza a file assente/corrotto in
+ogni configurazione), ognuno
 con i valori di timing/max-rate/batch-size/porte da usare per una data
 "discrezione" verso firewall/IDS. Impostabile con tre pulsanti in cima ad
 Amministrazione (`POST /api/scan-effort`).
@@ -305,9 +314,13 @@ wkhtmltopdf) genera un PDF con due sezioni componibili:
 
 `notify_telegram.py`/`notify_gmail.py` inviano il PDF generato: Telegram via
 Bot API (`sendDocument`), Gmail via SMTP con App Password. Entrambi leggono
-le credenziali da file dedicati o variabili d'ambiente (stesso pattern
-delle chiavi AI/NVD), e sono opzionali — l'app segnala chiaramente in UI
-se non sono configurati, senza bloccare le altre funzionalità.
+le credenziali tramite `secrets_store.py` (variabile d'ambiente prima, file
+dedicato in `keys/` poi — stesso modulo usato da `groq_client.py`,
+`gemini_client.py`, `ollama_client.py`, `nvd_client.py`,
+`nmap_proxy_client.py`/`nmap_proxy_server.py`, centralizzato per non
+duplicare lo stesso meccanismo in ogni client), e sono opzionali — l'app
+segnala chiaramente in UI se non sono configurati, senza bloccare le altre
+funzionalità.
 
 `report_schedule.py` + il thread `_report_scheduler_loop` in `app.py`
 permettono l'invio automatico periodico (6h/12h/24h/settimanale),

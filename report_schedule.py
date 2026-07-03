@@ -7,10 +7,9 @@ in app.py controlla periodicamente is_due() e, se vero, genera/invia il
 report e chiama mark_sent().
 """
 
-import json
-from pathlib import Path
+import json_settings
 
-CONFIG_PATH = Path(__file__).parent / "instance" / "report_schedule.json"
+CONFIG_FILE = "report_schedule.json"
 
 DEFAULT_CONFIG = {
     "enabled": False,
@@ -24,23 +23,11 @@ DEFAULT_CONFIG = {
 
 
 def load():
-    if not CONFIG_PATH.exists():
-        return dict(DEFAULT_CONFIG)
-    try:
-        data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
-        return dict(DEFAULT_CONFIG)
-    config = dict(DEFAULT_CONFIG)
-    config.update({k: v for k, v in data.items() if k in DEFAULT_CONFIG})
-    return config
+    return json_settings.load(CONFIG_FILE, DEFAULT_CONFIG)
 
 
 def save(config):
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    merged = dict(DEFAULT_CONFIG)
-    merged.update({k: v for k, v in config.items() if k in DEFAULT_CONFIG})
-    CONFIG_PATH.write_text(json.dumps(merged, indent=2), encoding="utf-8")
-    return merged
+    return json_settings.save(CONFIG_FILE, DEFAULT_CONFIG, config)
 
 
 def is_due(config, now):

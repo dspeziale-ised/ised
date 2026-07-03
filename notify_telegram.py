@@ -6,15 +6,11 @@ dedicati nella cartella keys/ (mai committare, già in .gitignore) oppure
 variabili d'ambiente equivalenti.
 """
 
-import os
-from pathlib import Path
-
 import requests
 
+import secrets_store
+
 API_BASE = "https://api.telegram.org/bot"
-_KEYS_DIR = Path(__file__).parent / "keys"
-_TOKEN_FILE = _KEYS_DIR / "telegram_bot_token"
-_CHAT_ID_FILE = _KEYS_DIR / "telegram_chat_id"
 
 
 class TelegramError(Exception):
@@ -22,21 +18,11 @@ class TelegramError(Exception):
 
 
 def _load_token():
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    if token:
-        return token.strip()
-    if _TOKEN_FILE.exists():
-        return _TOKEN_FILE.read_text(encoding="utf-8").strip()
-    return None
+    return secrets_store.load_secret("TELEGRAM_BOT_TOKEN", "telegram_bot_token")
 
 
 def _load_chat_id():
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    if chat_id:
-        return chat_id.strip()
-    if _CHAT_ID_FILE.exists():
-        return _CHAT_ID_FILE.read_text(encoding="utf-8").strip()
-    return None
+    return secrets_store.load_secret("TELEGRAM_CHAT_ID", "telegram_chat_id")
 
 
 def is_configured():
@@ -51,11 +37,11 @@ def token_from_env():
     """True se il token viene da una variabile d'ambiente (non dal file
     scrivibile da UI) — in quel caso l'env var ha sempre la priorità e un
     salvataggio da form non avrebbe effetto visibile."""
-    return bool(os.environ.get("TELEGRAM_BOT_TOKEN"))
+    return secrets_store.is_from_env("TELEGRAM_BOT_TOKEN")
 
 
 def chat_id_from_env():
-    return bool(os.environ.get("TELEGRAM_CHAT_ID"))
+    return secrets_store.is_from_env("TELEGRAM_CHAT_ID")
 
 
 def get_chat_id_display():
@@ -67,11 +53,8 @@ def save_credentials(token=None, chat_id=None):
     """Salva token/chat_id nei file dedicati. Un campo vuoto/assente lascia
     invariato il valore già salvato (così il form può essere sottomesso
     senza dover re-inserire un token già configurato)."""
-    _KEYS_DIR.mkdir(parents=True, exist_ok=True)
-    if token:
-        _TOKEN_FILE.write_text(token.strip(), encoding="utf-8")
-    if chat_id:
-        _CHAT_ID_FILE.write_text(chat_id.strip(), encoding="utf-8")
+    secrets_store.save_secret("telegram_bot_token", token)
+    secrets_store.save_secret("telegram_chat_id", chat_id)
 
 
 def send_document(file_bytes, filename, caption=None, chat_id=None, timeout=60):

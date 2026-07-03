@@ -18,10 +18,9 @@ monitor_schedule.py e report_schedule.py (file JSON in instance/, non
 versionato, ricreato con il default se assente/corrotto).
 """
 
-import json
-from pathlib import Path
+import json_settings
 
-CONFIG_PATH = Path(__file__).parent / "instance" / "scan_effort.json"
+CONFIG_FILE = "scan_effort.json"
 
 LEVELS = ("low", "normal", "fast")
 DEFAULT_LEVEL = "normal"
@@ -81,22 +80,18 @@ PROFILES = {
 }
 
 
+_DEFAULT_CONFIG = {"level": DEFAULT_LEVEL}
+
+
 def load_level():
-    if not CONFIG_PATH.exists():
-        return DEFAULT_LEVEL
-    try:
-        data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
-        return DEFAULT_LEVEL
-    level = data.get("level")
+    level = json_settings.load(CONFIG_FILE, _DEFAULT_CONFIG)["level"]
     return level if level in LEVELS else DEFAULT_LEVEL
 
 
 def save_level(level):
     if level not in LEVELS:
         raise ValueError(f"Livello di effort sconosciuto: {level}")
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps({"level": level}, indent=2), encoding="utf-8")
+    json_settings.save(CONFIG_FILE, _DEFAULT_CONFIG, {"level": level})
     return level
 
 

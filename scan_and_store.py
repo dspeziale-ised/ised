@@ -7,20 +7,11 @@ Uso tipico:
 """
 
 import argparse
-import subprocess
-import sys
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 
-import nmap_proxy_client
+import scan_pipeline
 import scanner_db
-from classify import classify_device
-from nmap_parser import parse_nmap_xml
-
-
-def now_iso():
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def read_ips(path):
@@ -61,7 +52,7 @@ def run_batch(batch_ips, batch_idx, args, conn):
     scans_dir = Path(args.scans_dir)
     scans_dir.mkdir(parents=True, exist_ok=True)
 
-    ts = now_iso().replace(":", "-")
+    ts = scan_pipeline.now_iso().replace(":", "-")
     xml_out = scans_dir / f"batch_{batch_idx:04d}_{ts}.xml"
 
     with tempfile.NamedTemporaryFile(
@@ -71,43 +62,19 @@ def run_batch(batch_ips, batch_idx, args, conn):
         ip_list_file = Path(f.name)
 
     cmd = build_command(ip_list_file, xml_out, args)
-    started = now_iso()
     print(f"[batch {batch_idx}] {len(batch_ips)} host -> {xml_out.name}")
 
-    status = "ok"
     try:
-        nmap_proxy_client.run_nmap(cmd, capture_output=True, text=True, timeout=args.batch_timeout)
-    except subprocess.TimeoutExpired:
-        status = "timeout"
-        print(f"[batch {batch_idx}] timeout dopo {args.batch_timeout}s, "
-              f"uso i risultati parziali scritti finora")
+        result = scan_pipeline.run_and_store(cmd, xml_out, conn, len(batch_ips), timeout=args.batch_timeout)
     finally:
         ip_list_file.unlink(missing_ok=True)
 
-    finished = now_iso()
+    if result["status"] == "timeout":
+        print(f"[batch {batch_idx}] timeout dopo {args.batch_timeout}s, "
+              f"uso i risultati parziali scritti finora")
 
-    hosts = parse_nmap_xml(xml_out) if xml_out.exists() else []
-    up_hosts = 0
-    for host in hosts:
-        if host["state"] != "up":
-            continue
-        up_hosts += 1
-        device_type, device_vendor = classify_device(
-            host["os_matches"], host["services"], ip=host["ip"], ttl=host.get("ttl")
-        )
-        host["device_type"] = device_type
-        host["device_vendor"] = device_vendor
-        host["last_scanned"] = finished
-        host["raw_xml_path"] = str(xml_out)
-        scanner_db.upsert_host(conn, host)
-
-    scanner_db.log_scan(
-        conn, started, finished, len(batch_ips), str(xml_out), "nmap " + " ".join(cmd), status
-    )
-    conn.commit()
-
-    print(f"[batch {batch_idx}] completato: {up_hosts}/{len(batch_ips)} host registrati "
-          f"({status})")
+    print(f"[batch {batch_idx}] completato: {len(result['hosts_up'])}/{len(batch_ips)} host registrati "
+          f"({result['status']})")
 
 
 def main():

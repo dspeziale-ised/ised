@@ -8,20 +8,15 @@ dedicati nella cartella keys/ (mai committare, già in .gitignore) oppure
 variabili d'ambiente equivalenti.
 """
 
-import os
 import smtplib
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from pathlib import Path
+
+import secrets_store
 
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
-
-_KEYS_DIR = Path(__file__).parent / "keys"
-_ADDRESS_FILE = _KEYS_DIR / "gmail_address"
-_APP_PASSWORD_FILE = _KEYS_DIR / "gmail_app_password"
-_DEFAULT_TO_FILE = _KEYS_DIR / "gmail_to"
 
 
 class GmailError(Exception):
@@ -29,30 +24,15 @@ class GmailError(Exception):
 
 
 def _load_address():
-    value = os.environ.get("GMAIL_ADDRESS")
-    if value:
-        return value.strip()
-    if _ADDRESS_FILE.exists():
-        return _ADDRESS_FILE.read_text(encoding="utf-8").strip()
-    return None
+    return secrets_store.load_secret("GMAIL_ADDRESS", "gmail_address")
 
 
 def _load_app_password():
-    value = os.environ.get("GMAIL_APP_PASSWORD")
-    if value:
-        return value.strip()
-    if _APP_PASSWORD_FILE.exists():
-        return _APP_PASSWORD_FILE.read_text(encoding="utf-8").strip()
-    return None
+    return secrets_store.load_secret("GMAIL_APP_PASSWORD", "gmail_app_password")
 
 
 def default_recipient():
-    value = os.environ.get("GMAIL_TO")
-    if value:
-        return value.strip()
-    if _DEFAULT_TO_FILE.exists():
-        return _DEFAULT_TO_FILE.read_text(encoding="utf-8").strip()
-    return None
+    return secrets_store.load_secret("GMAIL_TO", "gmail_to")
 
 
 def has_app_password():
@@ -63,11 +43,11 @@ def address_from_env():
     """True se l'indirizzo viene da una variabile d'ambiente (non dal file
     scrivibile da UI) — in quel caso l'env var ha sempre la priorità e un
     salvataggio da form non avrebbe effetto visibile."""
-    return bool(os.environ.get("GMAIL_ADDRESS"))
+    return secrets_store.is_from_env("GMAIL_ADDRESS")
 
 
 def app_password_from_env():
-    return bool(os.environ.get("GMAIL_APP_PASSWORD"))
+    return secrets_store.is_from_env("GMAIL_APP_PASSWORD")
 
 
 def get_address_display():
@@ -81,13 +61,9 @@ def save_credentials(address=None, app_password=None, default_to=None):
     dedicati. Un campo vuoto/assente lascia invariato il valore già salvato
     (così il form può essere sottomesso senza dover re-inserire una
     password già configurata)."""
-    _KEYS_DIR.mkdir(parents=True, exist_ok=True)
-    if address:
-        _ADDRESS_FILE.write_text(address.strip(), encoding="utf-8")
-    if app_password:
-        _APP_PASSWORD_FILE.write_text(app_password.strip(), encoding="utf-8")
-    if default_to:
-        _DEFAULT_TO_FILE.write_text(default_to.strip(), encoding="utf-8")
+    secrets_store.save_secret("gmail_address", address)
+    secrets_store.save_secret("gmail_app_password", app_password)
+    secrets_store.save_secret("gmail_to", default_to)
 
 
 def is_configured():

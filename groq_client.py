@@ -9,8 +9,8 @@ import json
 import os
 import urllib.error
 import urllib.request
-from pathlib import Path
 
+import secrets_store
 from llm_common import (
     BROWSER_LIKE_USER_AGENT,
     SYSTEM_PROMPT,
@@ -26,7 +26,6 @@ from llm_common import (
 PROVIDER_NAME = "groq"
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
-_KEY_FILE = Path(__file__).parent / "keys" / "groq_api_key"
 
 # Alias per compatibilità con codice/test esistenti che importano da qui.
 GroqError = LLMError
@@ -40,12 +39,7 @@ def is_configured():
 
 
 def _load_api_key():
-    key = os.environ.get("GROQ_API_KEY")
-    if key:
-        return key.strip()
-    if _KEY_FILE.exists():
-        return _KEY_FILE.read_text(encoding="utf-8").strip()
-    return None
+    return secrets_store.load_secret("GROQ_API_KEY", "groq_api_key")
 
 
 def classify_signature_groups(groups, timeout=90, model=None):

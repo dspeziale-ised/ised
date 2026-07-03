@@ -10,14 +10,13 @@ sale a 50 ogni 30s.
 """
 
 import json
-import os
 import urllib.error
 import urllib.parse
 import urllib.request
-from pathlib import Path
+
+import secrets_store
 
 NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
-_KEY_FILE = Path(__file__).parent / "keys" / "nvd_api_key"
 BROWSER_LIKE_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) net-inventory-vulnscan/1.0"
 )
@@ -41,12 +40,7 @@ def has_api_key():
 
 
 def _load_api_key():
-    key = os.environ.get("NVD_API_KEY")
-    if key:
-        return key.strip()
-    if _KEY_FILE.exists():
-        return _KEY_FILE.read_text(encoding="utf-8").strip()
-    return None
+    return secrets_store.load_secret("NVD_API_KEY", "nvd_api_key")
 
 
 def cpe22_to_23(cpe22):

@@ -90,6 +90,9 @@ discovery_scan.py           Ping-sweep 10.0.0.0/8 a 256 subnet (equivalente Pyth
 scripts/nmap-discovery-10net.ps1  Ping-sweep 10.0.0.0/8 (script PowerShell, uso nativo Windows)
 custom_scan.py               Scansione nmap libera (target + argomenti a scelta), risultati negli host
 scan_effort.py               Effort di rete globale (Debole/Normale/Fast): default per tutti i job di scansione
+scan_pipeline.py             Pipeline comune run nmap -> parse -> classifica -> upsert host -> log scan
+secrets_store.py              Lettura/scrittura credenziali: env var prima, file in keys/ poi (comune a tutti i client)
+json_settings.py              Load/save di config JSON in instance/ con default (comune a schedulazioni/effort)
 
 nmap_proxy_client.py        Client per instradare le chiamate nmap verso il proxy (modalità container)
 nmap_proxy_server.py        Proxy HTTP per nmap, gira nativamente sull'host (nmap fuori da Docker)

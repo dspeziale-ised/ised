@@ -13,8 +13,8 @@ import os
 import re
 import urllib.error
 import urllib.request
-from pathlib import Path
 
+import secrets_store
 from llm_common import (
     BROWSER_LIKE_USER_AGENT,
     SYSTEM_PROMPT,
@@ -28,7 +28,6 @@ from llm_common import (
 )
 
 PROVIDER_NAME = "ollama"
-_KEY_FILE = Path(__file__).parent / "keys" / "ollama_api_key"
 
 OLLAMA_CLOUD_URL = "https://ollama.com/v1/chat/completions"
 OLLAMA_LOCAL_URL = os.environ.get("OLLAMA_LOCAL_URL", "http://localhost:11434/v1/chat/completions")
@@ -44,12 +43,7 @@ def is_configured():
 
 
 def _load_api_key():
-    key = os.environ.get("OLLAMA_API_KEY")
-    if key:
-        return key.strip()
-    if _KEY_FILE.exists():
-        return _KEY_FILE.read_text(encoding="utf-8").strip()
-    return None
+    return secrets_store.load_secret("OLLAMA_API_KEY", "ollama_api_key")
 
 
 def classify_signature_groups(groups, timeout=240, model=None):

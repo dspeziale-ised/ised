@@ -31,17 +31,13 @@ from pathlib import Path
 
 import requests
 
+import secrets_store
+
 PROXY_URL = (os.environ.get("NMAP_PROXY_URL") or "").rstrip("/") or None
-_TOKEN_FILE = Path(__file__).parent / "keys" / "nmap_proxy_token"
 
 
 def _load_token():
-    token = os.environ.get("NMAP_PROXY_TOKEN")
-    if token:
-        return token.strip()
-    if _TOKEN_FILE.exists():
-        return _TOKEN_FILE.read_text(encoding="utf-8").strip()
-    return None
+    return secrets_store.load_secret("NMAP_PROXY_TOKEN", "nmap_proxy_token")
 
 
 def is_proxy_mode():

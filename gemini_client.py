@@ -8,8 +8,8 @@ import os
 import re
 import urllib.error
 import urllib.request
-from pathlib import Path
 
+import secrets_store
 from llm_common import (
     BROWSER_LIKE_USER_AGENT,
     SYSTEM_PROMPT,
@@ -26,20 +26,12 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_API_URL = (
     f"https://generativelanguage.googleapis.com/v1beta/models/{{model}}:generateContent"
 )
-_KEY_FILE = Path(__file__).parent / "keys" / "gemini_api_key"
-
-
 def is_configured():
     return bool(_load_api_key())
 
 
 def _load_api_key():
-    key = os.environ.get("GEMINI_API_KEY")
-    if key:
-        return key.strip()
-    if _KEY_FILE.exists():
-        return _KEY_FILE.read_text(encoding="utf-8").strip()
-    return None
+    return secrets_store.load_secret("GEMINI_API_KEY", "gemini_api_key")
 
 
 def _parse_retry_delay(detail):

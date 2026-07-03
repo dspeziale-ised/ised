@@ -20,25 +20,19 @@ lo raggiunga tramite 'host.docker.internal'.
 
 import argparse
 import base64
-import os
 import shutil
 import subprocess
-from pathlib import Path
 
 from flask import Flask, jsonify, request
 
+import secrets_store
+
 app = Flask(__name__)
 NMAP_BIN = shutil.which("nmap") or "nmap"
-_TOKEN_FILE = Path(__file__).parent / "keys" / "nmap_proxy_token"
 
 
 def _expected_token():
-    token = os.environ.get("NMAP_PROXY_TOKEN")
-    if token:
-        return token.strip()
-    if _TOKEN_FILE.exists():
-        return _TOKEN_FILE.read_text(encoding="utf-8").strip()
-    return None
+    return secrets_store.load_secret("NMAP_PROXY_TOKEN", "nmap_proxy_token")
 
 
 @app.before_request
