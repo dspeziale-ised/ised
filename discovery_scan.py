@@ -29,16 +29,19 @@ BASE = Path(__file__).parent
 LOCK_FILE = BASE / "discovery.lock"
 DEFAULT_BATCH_SIZE = 8
 DEFAULT_TIMEOUT = 900
+DEFAULT_TIMING = "3"
 TOTAL_SUBNETS = 256
 
 
-def scan_subnet(subnet_id, output_dir, timeout=DEFAULT_TIMEOUT):
+def scan_subnet(subnet_id, output_dir, timeout=DEFAULT_TIMEOUT, timing=DEFAULT_TIMING):
     """Esegue nmap -sn sulla subnet 10.<subnet_id>.0.0/16, scrive l'XML in
-    output_dir. Ritorna (subnet_id, ok, errore_o_None)."""
+    output_dir. Ritorna (subnet_id, ok, errore_o_None). timing: template
+    nmap -T0..-T5 (valori bassi = meno pacchetti/probe al secondo, per non
+    affaticare firewall/IDS, a costo di una scansione più lenta)."""
     xml_path = Path(output_dir) / f"scan_10.{subnet_id}.0.0.xml"
     try:
         nmap_proxy_client.run_nmap(
-            ["-sn", "-n", f"10.{subnet_id}.0.0/16", "-oX", str(xml_path)],
+            ["-sn", "-n", f"-T{timing}", f"10.{subnet_id}.0.0/16", "-oX", str(xml_path)],
             timeout=timeout,
         )
         return subnet_id, True, None
@@ -49,7 +52,7 @@ def scan_subnet(subnet_id, output_dir, timeout=DEFAULT_TIMEOUT):
 
 
 def run_discovery(output_dir, batch_size=DEFAULT_BATCH_SIZE, timeout=DEFAULT_TIMEOUT,
-                   subnet_ids=range(TOTAL_SUBNETS)):
+                   timing=DEFAULT_TIMING, subnet_ids=range(TOTAL_SUBNETS)):
     """Lancia il ping-sweep su tutte le subnet indicate con parallelismo
     limitato a batch_size. Ritorna {'ok': N, 'failed': N}."""
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -58,7 +61,7 @@ def run_discovery(output_dir, batch_size=DEFAULT_BATCH_SIZE, timeout=DEFAULT_TIM
     results = {"ok": 0, "failed": 0}
 
     with ThreadPoolExecutor(max_workers=batch_size) as executor:
-        futures = {executor.submit(scan_subnet, i, output_dir, timeout): i for i in subnet_ids}
+        futures = {executor.submit(scan_subnet, i, output_dir, timeout, timing): i for i in subnet_ids}
         for future in as_completed(futures):
             subnet_id, ok, error = future.result()
             if ok:
@@ -79,12 +82,15 @@ def main():
     parser.add_argument("--output-dir", default=str(BASE / "data"))
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT,
                          help="Timeout per singola subnet in secondi (default 900)")
+    parser.add_argument("--timing", default=DEFAULT_TIMING, choices=["0", "1", "2", "3", "4", "5"],
+                         help="Timing template nmap -T0..-T5 (default 3): valori bassi per non "
+                              "affaticare firewall/IDS")
     args = parser.parse_args()
 
     with JobLock(LOCK_FILE):
         print(f"Avvio discovery XML su 10.0.0.0/8 ({TOTAL_SUBNETS} subnet /16), "
-              f"batch size {args.batch_size}, output in {args.output_dir}...", flush=True)
-        results = run_discovery(args.output_dir, args.batch_size, args.timeout)
+              f"batch size {args.batch_size}, timing -T{args.timing}, output in {args.output_dir}...", flush=True)
+        results = run_discovery(args.output_dir, args.batch_size, args.timeout, args.timing)
         print(f"Completato: {results['ok']} OK, {results['failed']} fallite su {TOTAL_SUBNETS} subnet.")
 
 

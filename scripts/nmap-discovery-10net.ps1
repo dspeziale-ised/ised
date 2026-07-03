@@ -11,15 +11,21 @@
     Directory di output per i file XML (default .\nmap_xml).
 .PARAMETER NmapPath
     Percorso dell'eseguibile nmap (default: cerca nel PATH).
+.PARAMETER Timing
+    Timing template nmap -T0..-T5 (default 3 = normale). Valori bassi
+    (0-2) riducono il rate di pacchetti/probe per non affaticare
+    firewall/IDS, a costo di una scansione più lenta.
 .EXAMPLE
     .\nmap-discovery-10net.ps1
 .EXAMPLE
-    .\nmap-discovery-10net.ps1 -BatchSize 16 -OutputDir C:\scans
+    .\nmap-discovery-10net.ps1 -BatchSize 16 -OutputDir C:\scans -Timing 2
 #>
 param (
     [int]$BatchSize    = 16,
     [string]$OutputDir = ".\nmap_xml",
-    [string]$NmapPath  = "nmap"
+    [string]$NmapPath  = "nmap",
+    [ValidateRange(0,5)]
+    [int]$Timing       = 3
 )
 
 $ErrorActionPreference = "Stop"
@@ -51,15 +57,16 @@ $OutputDir = (Resolve-Path $OutputDir).Path
 
 Write-Host "Nmap:       $nmapExe"   -ForegroundColor Cyan
 Write-Host "Batch size: $BatchSize" -ForegroundColor Cyan
+Write-Host "Timing:     -T$Timing" -ForegroundColor Cyan
 Write-Host "Output:     $OutputDir" -ForegroundColor Cyan
 Write-Host "Avvio discovery XML su 10.0.0.0/8 (256 subnet /16)..." -ForegroundColor Cyan
 
 # --- 4. Blocco eseguito da ogni job ---
 $scanBlock = {
-    param($id, $outDir, $nmapExe)
+    param($id, $outDir, $nmapExe, $timing)
     $xmlFile = Join-Path $outDir ("scan_10.{0}.0.0.xml" -f $id)
     # 2>&1: cattura anche stderr, cosi eventuali errori di nmap tornano nel job
-    & $nmapExe -sn -n ("10.{0}.0.0/16" -f $id) -oX $xmlFile 2>&1
+    & $nmapExe -sn -n "-T$timing" ("10.{0}.0.0/16" -f $id) -oX $xmlFile 2>&1
 }
 
 # --- 5. Throttle "rolling": mantiene sempre al massimo $BatchSize job attivi ---
@@ -76,7 +83,7 @@ function Drain-FinishedJobs {
     }
 }
 
-for ($id = 0; $id -lt $total; $id++) {
+for ($id = 131; $id -lt $total; $id++) {
 
     # se ci sono gia' troppi job in esecuzione, aspetta che si liberino
     while (@(Get-Job -Name "$jobPrefix*" | Where-Object State -eq 'Running').Count -ge $BatchSize) {
@@ -87,7 +94,7 @@ for ($id = 0; $id -lt $total; $id++) {
 
     Start-Job -Name ("{0}_{1}" -f $jobPrefix, $id) `
               -ScriptBlock $scanBlock `
-              -ArgumentList $id, $OutputDir, $nmapExe | Out-Null
+              -ArgumentList $id, $OutputDir, $nmapExe, $Timing | Out-Null
 
     Write-Host ("[{0,3}/{1}] avviato scan 10.{2}.0.0/16" -f ($id + 1), $total, $id) `
         -ForegroundColor DarkGray

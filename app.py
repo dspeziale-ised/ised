@@ -417,32 +417,57 @@ def admin_panel():
 JOB_FORCE_FLAG = {"attack": "--update-matrix"}
 
 
+DISCOVERY_TIMING_CHOICES = {"0", "1", "2", "3", "4", "5"}
+RESCAN_TIMING_CHOICES = {"1", "2", "3", "4", "5"}
+
+
 def build_discovery_args(values):
     """Costruisce gli argomenti CLI per il job discovery dai campi del form
-    (BatchSize/OutputDir/NmapPath). Di default scrive gli XML direttamente in
-    data/, cosi il job 'rescan' successivo li trova senza passaggi manuali.
-    Il formato dei flag dipende da quale script è attivo (vedi
-    USE_PYTHON_DISCOVERY): PowerShell (nativo) o discovery_scan.py (container)."""
+    (BatchSize/OutputDir/NmapPath/Timing). Di default scrive gli XML
+    direttamente in data/, cosi il job 'rescan' successivo li trova senza
+    passaggi manuali. Il formato dei flag dipende da quale script è attivo
+    (vedi USE_PYTHON_DISCOVERY): PowerShell (nativo) o discovery_scan.py
+    (container). 'timing' (-T0..-T5, default 3) controlla l'aggressività
+    del ping-sweep: valori bassi per non affaticare firewall/IDS, a costo
+    di una scansione più lenta — il numero di thread/subnet in parallelo
+    resta invece controllato da 'batch_size'."""
     output_dir = (values.get("output_dir") or "").strip() or str(DATA_DIR)
     batch_size = values.get("batch_size", type=int)
+    timing = (values.get("timing") or "").strip()
+    if timing not in DISCOVERY_TIMING_CHOICES:
+        timing = None
 
     if USE_PYTHON_DISCOVERY:
         args = ["--output-dir", output_dir]
         if batch_size and batch_size > 0:
             args += ["--batch-size", str(batch_size)]
+        if timing:
+            args += ["--timing", timing]
         return args
 
     args = []
     if batch_size and batch_size > 0:
         args += ["-BatchSize", str(batch_size)]
     args += ["-OutputDir", output_dir]
+    if timing:
+        args += ["-Timing", timing]
     nmap_path = (values.get("nmap_path") or "").strip()
     if nmap_path:
         args += ["-NmapPath", nmap_path]
     return args
 
 
-JOB_ARGS_BUILDERS = {"discovery": build_discovery_args}
+def build_rescan_args(values):
+    """Costruisce gli argomenti CLI per run_rescan.py dai campi del form:
+    solo 'timing' (-T1..-T5, default 4 se non indicato) per controllare
+    l'aggressività della scansione OS/servizi, stesso motivo di discovery."""
+    timing = (values.get("timing") or "").strip()
+    if timing not in RESCAN_TIMING_CHOICES:
+        return []
+    return ["--timing", timing]
+
+
+JOB_ARGS_BUILDERS = {"discovery": build_discovery_args, "rescan": build_rescan_args}
 
 
 @app.route("/jobs/<name>/start", methods=["POST"])
