@@ -4,6 +4,24 @@
 {% block breadcrumb %}<li class="breadcrumb-item active">Dashboard</li>{% endblock %}
 
 {% block content %}
+<div class="card card-outline card-warning mb-3">
+  <div class="card-body py-2 d-flex align-items-center flex-wrap">
+    <span class="mr-2"><i class="fas fa-gauge-high"></i> <strong>Effort di rete globale:</strong></span>
+    <span class="badge badge-{{ 'success' if effort_level == 'low' else ('warning' if effort_level == 'normal' else 'danger') }} mr-3"
+          id="effortCurrentBadge">{{ effort_profile.label }}</span>
+    <div class="btn-group btn-group-sm mr-3" role="group" id="effortLevelGroup">
+      {% for p in effort_profiles %}
+      <button type="button" class="btn {{ 'btn-primary' if p.level == effort_level else 'btn-outline-secondary' }} effort-level-btn"
+              data-level="{{ p.level }}">{{ p.label }}</button>
+      {% endfor %}
+    </div>
+    <small class="text-muted" id="effortDescription">{{ effort_profile.description }}</small>
+    <a href="{{ url_for('admin_panel') }}" class="btn btn-sm btn-outline-secondary ml-auto">
+      <i class="fas fa-sliders"></i> Dettagli
+    </a>
+  </div>
+</div>
+
 <div class="row">
   <div class="col-lg-3 col-6">
     <div class="small-box bg-info">
@@ -290,5 +308,7 @@ setInterval(refreshScanStatus, 5000);
 
 {% include "_jobs_script.html" %}
 initJobWidgets({ discovery: {}, rescan: {}, classify: {}, vuln: {} });
+
+{% include "_effort_script.html" %}
 </script>
 {% endblock %}

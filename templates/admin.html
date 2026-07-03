@@ -491,29 +491,7 @@
 
 {% block extra_js %}
 <script>
-const EFFORT_DESCRIPTIONS = {
-  {% for p in effort_profiles %}"{{ p.level }}": {{ p.description|tojson }},{% endfor %}
-};
-document.querySelectorAll('.effort-level-btn').forEach(function (btn) {
-  btn.addEventListener('click', function () {
-    document.querySelectorAll('.effort-level-btn').forEach(function (b) {
-      b.classList.remove('btn-primary');
-      b.classList.add('btn-outline-secondary');
-    });
-    btn.classList.remove('btn-outline-secondary');
-    btn.classList.add('btn-primary');
-    document.getElementById('effortDescription').textContent = EFFORT_DESCRIPTIONS[btn.dataset.level] || '';
-    const body = new URLSearchParams();
-    body.set('level', btn.dataset.level);
-    fetch("{{ url_for('api_scan_effort') }}", { method: 'POST', body: body })
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (!d.ok) { alert(d.reason || 'Errore.'); return; }
-        location.reload();
-      })
-      .catch(function () { alert('Errore di rete.'); });
-  });
-});
+{% include "_effort_script.html" %}
 
 {% include "_jobs_script.html" %}
 initJobWidgets({

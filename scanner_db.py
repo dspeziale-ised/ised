@@ -290,6 +290,22 @@ CREATE TABLE IF NOT EXISTS host_status_checks (
     checked_at TEXT NOT NULL
 );
 
+-- Template di scansione nmap personalizzata (Inventario -> Scansione nmap):
+-- stato COMPLETO di ogni campo del form (fields_json), salvato con un nome,
+-- per ripristinare esattamente la stessa configurazione senza doverla
+-- ricostruire opzione per opzione ogni volta. target/args sono solo un
+-- riepilogo leggibile (mostrato nella lista template), il ripristino del
+-- form lato client usa fields_json. Nel database (non in un file JSON in
+-- instance/) perché sopravviva ai rebuild del container Docker, che non
+-- hanno un volume su instance/ a differenza del database Postgres.
+CREATE TABLE IF NOT EXISTS nmap_scan_templates (
+    name        TEXT PRIMARY KEY,
+    target      TEXT,
+    args        TEXT,
+    fields_json TEXT NOT NULL,
+    saved_at    TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_os_matches_host ON os_matches(host_id);
 CREATE INDEX IF NOT EXISTS idx_services_host ON services(host_id);
 CREATE INDEX IF NOT EXISTS idx_hosts_device_type ON hosts(device_type);
@@ -823,3 +839,42 @@ def log_scan(conn, started_at, finished_at, target_count, xml_path, command, sta
            VALUES (?,?,?,?,?,?)""",
         (started_at, finished_at, target_count, xml_path, command, status),
     )
+
+
+def list_scan_templates(conn):
+    """Ritorna i template di scansione nmap salvati, ordinati per nome:
+    [{name, target, args, fields, saved_at}, ...]."""
+    rows = conn.execute(
+        "SELECT name, target, args, fields_json, saved_at FROM nmap_scan_templates ORDER BY name"
+    ).fetchall()
+    return [
+        {
+            "name": r["name"],
+            "target": r["target"] or "",
+            "args": r["args"] or "",
+            "fields": json.loads(r["fields_json"]) if r["fields_json"] else {},
+            "saved_at": r["saved_at"],
+        }
+        for r in rows
+    ]
+
+
+def save_scan_template(conn, name, target, args, fields):
+    """Salva (o sovrascrive, se esiste già un template con lo stesso nome)
+    un template di scansione nmap personalizzata."""
+    conn.execute(
+        """INSERT INTO nmap_scan_templates (name, target, args, fields_json, saved_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(name) DO UPDATE SET
+               target = excluded.target, args = excluded.args,
+               fields_json = excluded.fields_json, saved_at = excluded.saved_at""",
+        (name, (target or "").strip(), args or "", json.dumps(fields or {}), _now()),
+    )
+    conn.commit()
+
+
+def delete_scan_template(conn, name):
+    """Ritorna True se un template con quel nome esisteva ed è stato rimosso."""
+    cur = conn.execute("DELETE FROM nmap_scan_templates WHERE name = ?", (name,))
+    conn.commit()
+    return (cur.rowcount or 0) > 0

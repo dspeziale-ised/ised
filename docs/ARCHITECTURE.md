@@ -124,6 +124,8 @@ attack_technique_tactics   (technique_id, tactic_shortname) PK composita        
 host_attack_techniques     (host_id →) technique_id, reason, source, detected_at      -- mappatura euristica per host
 
 host_status_checks   (host_id →) status ('up'/'down'), checked_at    -- storico raggiungibilità, vedi "Monitoraggio"
+
+nmap_scan_templates   name (PK), target, args, fields_json, saved_at    -- template salvati, vedi "Scansione nmap personalizzata"
 ```
 
 Note di design:
@@ -251,6 +253,20 @@ Flag di output/input file
 (`-oX`/`-oN`/`-oG`/`-oA`/`-iL`) digitati per errore negli argomenti extra
 vengono rimossi prima di aggiungere il proprio `-oX` obbligatorio, per
 evitare conflitti con nmap (non accetta due `-oX`).
+
+**Template di scansione**: il form permette di salvare/ricaricare/eliminare
+combinazioni di opzioni con un nome (`GET/POST /api/nmap-scan-templates`,
+`DELETE /api/nmap-scan-templates/<name>`), tabella `nmap_scan_templates`
+(`scanner_db.list_scan_templates`/`save_scan_template`/`delete_scan_template`,
+upsert per nome con `ON CONFLICT`). `fields_json` contiene lo stato
+COMPLETO di ogni singolo controllo del form (non solo il comando nmap
+risultante): "Carica" ripristina il form campo per campo, azzerando quelli
+non presenti nel template salvato — `target`/`args` restano salvati solo
+come riepilogo leggibile. Nel database (Postgres in Docker, SQLite in uso
+nativo) e non in un file JSON in `instance/`, perché sopravviva ai rebuild
+del container: a differenza del volume Postgres, `instance/` nel container
+non ha un volume dedicato e viene ricreato da zero ad ogni `docker compose
+up --build`.
 
 ## Effort di rete globale
 

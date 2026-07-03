@@ -24,7 +24,6 @@ import notify_telegram
 import report_generator
 import report_schedule
 import scan_effort
-import scan_templates
 import scanner_db
 
 BASE_DIR = Path(__file__).parent
@@ -723,6 +722,9 @@ def dashboard():
         top_services=top_services,
         last_scan=last_scan,
         scan_progress=get_scan_progress(),
+        effort_level=scan_effort.load_level(),
+        effort_profile=scan_effort.current_profile(),
+        effort_profiles=scan_effort.all_profiles(),
     )
 
 
@@ -1256,12 +1258,13 @@ def nmap_scan_page():
         "custom_scan.html",
         job_running=is_job_running("customscan"),
         effort_profile=scan_effort.current_profile(),
-        templates=scan_templates.list_templates(),
+        templates=scanner_db.list_scan_templates(get_db()),
     )
 
 
 @app.route("/api/nmap-scan-templates", methods=["GET", "POST"])
 def api_nmap_scan_templates():
+    db = get_db()
     if request.method == "POST":
         name = (request.form.get("name") or "").strip()
         if not name:
@@ -1270,16 +1273,17 @@ def api_nmap_scan_templates():
             fields = json.loads(request.form.get("fields") or "{}")
         except ValueError:
             return jsonify({"ok": False, "reason": "Campo 'fields' non è JSON valido."}), 400
-        scan_templates.save_template(name, request.form.get("target"), request.form.get("args"), fields)
-    return jsonify({"ok": True, "templates": scan_templates.list_templates()})
+        scanner_db.save_scan_template(db, name, request.form.get("target"), request.form.get("args"), fields)
+    return jsonify({"ok": True, "templates": scanner_db.list_scan_templates(db)})
 
 
 @app.route("/api/nmap-scan-templates/<name>", methods=["DELETE"])
 def api_nmap_scan_template_delete(name):
-    deleted = scan_templates.delete_template(name)
+    db = get_db()
+    deleted = scanner_db.delete_scan_template(db, name)
     if not deleted:
         return jsonify({"ok": False, "reason": "Template non trovato."}), 404
-    return jsonify({"ok": True, "templates": scan_templates.list_templates()})
+    return jsonify({"ok": True, "templates": scanner_db.list_scan_templates(db)})
 
 
 @app.route("/attack-matrix")
