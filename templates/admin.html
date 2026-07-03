@@ -83,19 +83,35 @@
         </div>
         <div class="form-row mb-2">
           <div class="col-md-3">
-            <label class="small text-muted mb-1">Job paralleli (BatchSize)</label>
+            <label class="small text-muted mb-1">Job paralleli (thread contemporanei)</label>
             <input type="number" min="1" max="64" step="1" class="form-control form-control-sm" id="discoveryBatchSize" value="8">
           </div>
-          <div class="col-md-6">
+          <div class="col-md-3">
+            <label class="small text-muted mb-1">Effort / Timing nmap</label>
+            <select class="form-control form-control-sm" id="discoveryTiming">
+              <option value="0">T0 - Paranoid (minimo impatto, molto lento)</option>
+              <option value="1">T1 - Sneaky (basso impatto)</option>
+              <option value="2">T2 - Polite (impatto ridotto, consigliato per firewall sensibili)</option>
+              <option value="3" selected>T3 - Normal (default nmap)</option>
+              <option value="4">T4 - Aggressive (veloce)</option>
+              <option value="5">T5 - Insane (massima velocità, molto invasivo)</option>
+            </select>
+          </div>
+          <div class="col-md-3">
             <label class="small text-muted mb-1">Cartella output XML</label>
             <input type="text" class="form-control form-control-sm" id="discoveryOutputDir" value="{{ data_dir }}">
-            <small class="text-muted">Di default <code>data/</code>: cosi "Aggiorna scansione" trova subito i nuovi file.</small>
           </div>
           <div class="col-md-3">
             <label class="small text-muted mb-1">Percorso nmap (opzionale)</label>
             <input type="text" class="form-control form-control-sm" id="discoveryNmapPath" placeholder="nmap">
           </div>
         </div>
+        <p class="small text-muted">
+          <i class="fas fa-circle-info"></i> "Effort" abbassa il rate di pacchetti/probe per non
+          affaticare firewall/IDS (a costo di una scansione più lenta); "Job paralleli" controlla
+          invece quante subnet vengono scansionate contemporaneamente. Riduci entrambi per una
+          scansione più discreta.
+        </p>
         <button class="btn btn-warning job-start-btn mb-3" data-job="discovery" {{ 'disabled' if jobs_running.discovery else '' }}>
           <i class="fas fa-play"></i> Avvia discovery
         </button>
@@ -103,9 +119,9 @@
           <i class="fas fa-stop"></i> Interrompi
         </button>
         <p class="small text-muted mb-2">
-          Può richiedere da alcuni minuti a diverse ore in base a <code>BatchSize</code> e alla
+          Può richiedere da alcuni minuti a diverse ore in base a batch size/effort e alla
           reattività della rete: sono 256 subnet /16 da scansionare in totale, eseguite al massimo
-          <code>BatchSize</code> alla volta in parallelo.
+          "Job paralleli" alla volta.
         </p>
         {% if xml_files %}
         <h6 class="text-muted">File XML già presenti in <code>data/</code></h6>
@@ -139,6 +155,19 @@
           Nessun file <code>data/*.xml</code> trovato: esegui prima "Discovery iniziale".
         </div>
         {% endif %}
+        <div class="form-row mb-2">
+          <div class="col-md-4">
+            <label class="small text-muted mb-1">Effort / Timing nmap (OS + servizi)</label>
+            <select class="form-control form-control-sm" id="rescanTiming">
+              <option value="1">T1 - Sneaky (basso impatto)</option>
+              <option value="2">T2 - Polite (impatto ridotto, consigliato per firewall sensibili)</option>
+              <option value="3">T3 - Normal</option>
+              <option value="4" selected>T4 - Aggressive (default)</option>
+              <option value="5">T5 - Insane (massima velocità, molto invasivo)</option>
+            </select>
+            <small class="text-muted">Valori bassi riducono il rate di probe per non affaticare firewall/IDS, a costo di una scansione più lenta.</small>
+          </div>
+        </div>
         <button class="btn btn-primary job-start-btn mb-3" data-job="rescan" {{ 'disabled' if jobs_running.rescan else '' }}>
           <i class="fas fa-play"></i> Avvia
         </button>
@@ -425,8 +454,11 @@ initJobWidgets({
     { id: 'discoveryBatchSize', param: 'batch_size' },
     { id: 'discoveryOutputDir', param: 'output_dir' },
     { id: 'discoveryNmapPath', param: 'nmap_path' },
+    { id: 'discoveryTiming', param: 'timing' },
   ] },
-  rescan: { forceCheckbox: null },
+  rescan: { forceCheckbox: null, fields: [
+    { id: 'rescanTiming', param: 'timing' },
+  ] },
   classify: { forceCheckbox: 'classifyForceCheck' },
   vuln: { forceCheckbox: 'vulnForceCheck' },
   attack: { forceCheckbox: 'attackForceCheck' },

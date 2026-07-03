@@ -4,6 +4,8 @@ import datetime
 import hashlib
 import math
 import os
+import platform
+import signal
 import subprocess
 import sys
 import threading
@@ -114,31 +116,52 @@ def close_db(exception=None):
         db.close()
 
 
-def is_nmap_running():
+IS_WINDOWS = platform.system() == "Windows"
+
+
+def _process_cmdlines_blob():
+    """Testo con tutte le command line dei processi attivi — una ricerca di
+    sottostringa dentro il risultato basta per i controlli di questo modulo
+    (is_nmap_running/is_scan_and_store_running/is_discovery_running).
+    Su Windows usa WMI (PowerShell); su Linux (container, dove tasklist/
+    powershell non esistono) legge direttamente /proc, senza bisogno di
+    nessun binario esterno."""
+    if IS_WINDOWS:
+        try:
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-CimInstance Win32_Process | Select-Object -ExpandProperty CommandLine"],
+                capture_output=True, text=True, timeout=8,
+            )
+            return out.stdout
+        except Exception:
+            return ""
+
+    parts = []
     try:
-        out = subprocess.run(
-            ["tasklist", "/FI", "IMAGENAME eq nmap.exe"],
-            capture_output=True, text=True, timeout=5,
-        )
-        return "nmap.exe" in out.stdout.lower()
-    except Exception:
-        return False
+        pids = [p for p in os.listdir("/proc") if p.isdigit()]
+    except OSError:
+        return ""
+    for pid in pids:
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                raw = f.read()
+        except OSError:
+            continue
+        if raw:
+            parts.append(raw.replace(b"\x00", b" ").decode("utf-8", errors="replace"))
+    return "\n".join(parts)
+
+
+def is_nmap_running():
+    return "nmap" in _process_cmdlines_blob().lower()
 
 
 def is_scan_and_store_running():
     """True solo se il processo scan_and_store.py di QUESTO progetto è
     attivo — a differenza di is_nmap_running(), non viene ingannato da un
     nmap.exe indipendente (es. una ping-sweep lanciata a mano dall'utente)."""
-    try:
-        out = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "Get-CimInstance Win32_Process -Filter \"Name LIKE '%python%'\" "
-             "| Select-Object -ExpandProperty CommandLine"],
-            capture_output=True, text=True, timeout=8,
-        )
-        return "scan_and_store.py" in out.stdout
-    except Exception:
-        return False
+    return "scan_and_store.py" in _process_cmdlines_blob()
 
 
 def is_discovery_running():
@@ -148,34 +171,69 @@ def is_discovery_running():
     falsi positivi con processi indipendenti). Copre sia lo script
     PowerShell nativo sia l'equivalente Python (discovery_scan.py) usato in
     modalità container."""
-    try:
-        out = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "Get-CimInstance Win32_Process "
-             "| Select-Object -ExpandProperty CommandLine"],
-            capture_output=True, text=True, timeout=8,
-        )
-        return "nmap-discovery-10net.ps1" in out.stdout or "discovery_scan.py" in out.stdout
-    except Exception:
-        return False
+    blob = _process_cmdlines_blob()
+    return "nmap-discovery-10net.ps1" in blob or "discovery_scan.py" in blob
 
 
 def is_pid_alive(pid):
+    if IS_WINDOWS:
+        try:
+            out = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            return str(pid) in out.stdout
+        except Exception:
+            return False
     try:
-        out = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}"],
-            capture_output=True, text=True, timeout=5,
-        )
-        return str(pid) in out.stdout
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # esiste ma non abbiamo i permessi per segnalarlo: consideralo vivo
     except Exception:
         return False
 
 
-# In modalità container (NMAP_PROXY_URL impostata) non c'è PowerShell/nmap
-# nativo nel container: si usa l'equivalente Python (discovery_scan.py, che
-# passa da nmap_proxy_client) invece dello script PowerShell originale, che
-# resta il default per l'uso nativo su Windows (più maturo, in uso da tempo).
-USE_PYTHON_DISCOVERY = bool(os.environ.get("NMAP_PROXY_URL"))
+def _posix_descendant_pids(root_pid):
+    """PID di tutti i discendenti (figli, nipoti, ...) di root_pid su Linux,
+    letti da /proc/<pid>/stat (campo ppid) — nessun binario esterno
+    necessario, usato per emulare 'taskkill /T' quando si interrompe un job
+    dentro un container."""
+    children_by_parent = {}
+    try:
+        pids = [int(p) for p in os.listdir("/proc") if p.isdigit()]
+    except OSError:
+        return []
+    for pid in pids:
+        try:
+            with open(f"/proc/{pid}/stat", "r", encoding="utf-8", errors="replace") as f:
+                stat = f.read()
+            # il 'comm' (2° campo) è tra parentesi e può contenere spazi/parentesi:
+            # si riparte dopo l'ULTIMA ')' per non confondersi, poi state=0, ppid=1
+            after_comm = stat.rsplit(")", 1)[-1].split()
+            ppid = int(after_comm[1])
+            children_by_parent.setdefault(ppid, []).append(pid)
+        except (OSError, IndexError, ValueError):
+            continue
+
+    result = []
+    stack = [root_pid]
+    while stack:
+        current = stack.pop()
+        for child in children_by_parent.get(current, []):
+            result.append(child)
+            stack.append(child)
+    return result
+
+
+# In modalità container non c'è PowerShell (un'immagine Linux non ce l'ha
+# proprio, indipendentemente da NMAP_PROXY_URL): si usa sempre l'equivalente
+# Python (discovery_scan.py, via nmap_proxy_client). Su Windows nativo resta
+# lo script PowerShell originale (più maturo, in uso da tempo), a meno che
+# NMAP_PROXY_URL non segnali esplicitamente una modalità proxy anche lì.
+USE_PYTHON_DISCOVERY = (not IS_WINDOWS) or bool(os.environ.get("NMAP_PROXY_URL"))
 
 # Job in background avviabili dalla UI (niente più comandi a mano da terminale):
 # - discovery: ping-sweep -sn su tutta 10.0.0.0/8 -> data/*.xml
@@ -266,10 +324,17 @@ def start_job(name, extra_args=None):
 
     job = JOBS[name]
     log = open(job["log_file"], "a", encoding="utf-8")
-    proc = subprocess.Popen(
-        job["cmd"] + (extra_args or []),
-        cwd=BASE_DIR, stdout=log, stderr=subprocess.STDOUT,
-    )
+    try:
+        proc = subprocess.Popen(
+            job["cmd"] + (extra_args or []),
+            cwd=BASE_DIR, stdout=log, stderr=subprocess.STDOUT,
+        )
+    except OSError as e:
+        # Es. lo script previsto non esiste su questa piattaforma (PowerShell
+        # dentro un container Linux): un errore chiaro qui, non un 500 che il
+        # frontend vede come generico "errore di rete".
+        log.close()
+        return False, f"Impossibile avviare {job['label']}: {e}"
     _job_processes[name] = proc
     log.close()  # il figlio ha già la sua copia duplicata del descrittore; non serve tenerlo aperto
     # Scrive subito il PID nel lock file: script non Python (es. discovery,
@@ -287,8 +352,9 @@ def start_job(name, extra_args=None):
 
 def stop_job(name):
     """Termina il job in corso, compreso l'intero albero di processi figli
-    (es. nmap lanciato da scan_and_store.py) tramite 'taskkill /T' — su
-    Windows terminare solo il processo padre non termina i figli."""
+    (es. nmap lanciato da scan_and_store.py): 'taskkill /F /T' su Windows,
+    kill di ogni discendente via /proc su Linux — in entrambi i casi perché
+    terminare solo il processo padre lascia i figli orfani in esecuzione."""
     job = JOBS[name]
     pid = None
 
@@ -305,10 +371,17 @@ def stop_job(name):
         return False, f"{job['label']}: nessun processo attivo trovato."
 
     try:
-        subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(pid)],
-            capture_output=True, text=True, timeout=15,
-        )
+        if IS_WINDOWS:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True, text=True, timeout=15,
+            )
+        else:
+            for p in _posix_descendant_pids(pid) + [pid]:
+                try:
+                    os.kill(p, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
     except Exception as e:
         return False, f"Errore durante l'arresto: {e}"
 
