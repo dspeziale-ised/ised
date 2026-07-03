@@ -26,8 +26,19 @@ try:
 except ImportError:
     psutil = None
 
+# Poll ogni 100ms: anche così, una connessione TCP di un port scan (aperta
+# e chiusa in millisecondi non appena nmap ottiene la risposta) può benissimo
+# non essere mai catturata — vedi il modulo docstring.
 _POLL_INTERVAL = 0.1
-_RESPONDED_STATUSES = {"ESTABLISHED", "CLOSE_WAIT"}
+# "Risposta ricevuta": qualunque stato OLTRE il semplice invio iniziale
+# (SYN_SENT), non solo ESTABLISHED/CLOSE_WAIT — quegli stati durano spesso
+# solo pochi millisecondi in una probe di scansione (nmap chiude subito la
+# connessione una volta determinato lo stato della porta), quindi anche
+# TIME_WAIT/FIN_WAIT*/CLOSING/LAST_ACK (raggiunti solo se la connessione è
+# arrivata a compimento) contano come prova che l'altro capo ha risposto.
+_RESPONDED_STATUSES = {
+    "ESTABLISHED", "CLOSE_WAIT", "TIME_WAIT", "FIN_WAIT1", "FIN_WAIT2", "CLOSING", "LAST_ACK",
+}
 
 
 def _poll_connections(pid, stop_event, seen_all, seen_responded):
