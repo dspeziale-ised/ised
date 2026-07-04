@@ -76,7 +76,7 @@ def _poll_connections(pid, stop_event, seen_all, seen_responded):
         stop_event.wait(_POLL_INTERVAL)
 
 
-def run_and_count_connections(cmd, timeout=None):
+def run_and_count_connections(cmd, timeout=None, on_start=None):
     """Esegue cmd (argv completo, binario incluso) come subprocess,
     monitorando in un thread separato le connessioni di rete aperte dal
     processo. Ritorna (returncode, stdout_bytes, stderr_bytes, timed_out,
@@ -87,9 +87,19 @@ def run_and_count_connections(cmd, timeout=None):
     - connections_in: il sottoinsieme che ha raggiunto uno stato che indica
       una risposta dall'altro capo (ESTABLISHED/CLOSE_WAIT).
 
+    'on_start(proc)', se passato, viene chiamato subito dopo l'avvio con
+    l'oggetto Popen: usato da nmap_proxy_server.py per registrare il
+    processo in un registro cancellabile (vedi /nmap/cancel) — altrimenti
+    un job fermato dalla UI in modalità proxy lascerebbe comunque nmap in
+    esecuzione sull'host fino al suo timeout naturale, dato che il processo
+    container e il vero processo nmap (sull'host) sono due alberi di
+    processi completamente separati.
+
     Se psutil non è disponibile, connections_out/connections_in sono
     sempre 0 (comportamento della subprocess invariato)."""
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if on_start:
+        on_start(proc)
     seen_all = set()
     seen_responded = set()
     stop_event = threading.Event()

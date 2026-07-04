@@ -19,6 +19,7 @@ import classify
 import cve_lookup
 import host_monitor
 import monitor_schedule
+import nmap_proxy_client
 import notify_gmail
 import notify_telegram
 import report_generator
@@ -335,9 +336,15 @@ def start_job(name, extra_args=None):
     job = JOBS[name]
     log = open(job["log_file"], "a", encoding="utf-8")
     try:
+        # JOB_NAME: usato da nmap_proxy_client.py come request_id per il
+        # registro di cancellazione del proxy (vedi stop_job) — così
+        # interrompere il job dalla UI in modalità proxy può terminare
+        # anche il vero processo nmap sull'host, non solo il processo
+        # dentro il container.
         proc = subprocess.Popen(
             job["cmd"] + (extra_args or []),
             cwd=BASE_DIR, stdout=log, stderr=subprocess.STDOUT,
+            env={**os.environ, "JOB_NAME": name},
         )
     except OSError as e:
         # Es. lo script previsto non esiste su questa piattaforma (PowerShell
@@ -364,7 +371,15 @@ def stop_job(name):
     """Termina il job in corso, compreso l'intero albero di processi figli
     (es. nmap lanciato da scan_and_store.py): 'taskkill /F /T' su Windows,
     kill di ogni discendente via /proc su Linux — in entrambi i casi perché
-    terminare solo il processo padre lascia i figli orfani in esecuzione."""
+    terminare solo il processo padre lascia i figli orfani in esecuzione.
+
+    In modalità proxy (Docker), chiede anche al proxy di terminare il vero
+    processo nmap sull'host: gira in un albero di processi separato da
+    quello del container, quindi killare solo qui dentro lo lascerebbe
+    comunque attivo fino al proprio timeout naturale (verificato: un batch
+    rimasto "in corso" per ore dopo che il job era già stato fermato)."""
+    nmap_proxy_client.cancel_job(name)
+
     job = JOBS[name]
     pid = None
 

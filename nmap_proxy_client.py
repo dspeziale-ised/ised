@@ -74,6 +74,42 @@ def is_proxy_mode():
     return bool(PROXY_URL)
 
 
+def _current_request_id():
+    """Identificatore del job corrente per il registro di cancellazione del
+    proxy (vedi cancel_job/nmap_proxy_server._active_processes): il nome
+    del job, impostato da app.py come variabile d'ambiente JOB_NAME quando
+    lo avvia (subprocess.Popen). Un solo processo con quel nome è mai in
+    esecuzione alla volta (is_job_running lo garantisce), quindi il nome
+    job basta come chiave. None fuori da un job avviato dalla UI (es. uno
+    script lanciato a mano da riga di comando): in quel caso 'Interrompi'
+    non è comunque disponibile da nessuna UI, quindi non serve poterlo
+    cancellare da remoto."""
+    return os.environ.get("JOB_NAME")
+
+
+def cancel_job(job_name):
+    """Chiede al proxy di terminare il processo nmap eventualmente in corso
+    per job_name (vedi nmap_proxy_server.cancel_nmap_route). Chiamata da
+    app.py quando l'utente ferma un job dalla UI: senza questo, in modalità
+    proxy interrompere il processo dentro il container non fermerebbe il
+    vero processo nmap sull'host (due alberi di processi separati) — che
+    continuerebbe fino al proprio timeout naturale. No-op silenzioso se non
+    in modalità proxy o se il proxy non è raggiungibile (un job già in fase
+    di arresto non deve bloccarsi per questo)."""
+    if not PROXY_URL:
+        return
+    headers = {}
+    token = _load_token()
+    if token:
+        headers["X-Proxy-Token"] = token
+    try:
+        requests.post(
+            f"{PROXY_URL}/nmap/cancel", json={"request_id": job_name}, headers=headers, timeout=10,
+        )
+    except requests.RequestException:
+        pass
+
+
 class CompletedProcessLike:
     """Oggetto minimale compatibile con subprocess.CompletedProcess (i campi
     usati nel resto del progetto: returncode, stdout, stderr) più
@@ -169,7 +205,10 @@ def _run_via_proxy(args, timeout, text):
     try:
         resp = requests.post(
             f"{PROXY_URL}/nmap",
-            json={"args": proxy_args, "timeout": timeout, "relocate_xml": bool(local_output_path)},
+            json={
+                "args": proxy_args, "timeout": timeout, "relocate_xml": bool(local_output_path),
+                "request_id": _current_request_id(),
+            },
             headers=headers, timeout=request_timeout,
         )
     except requests.Timeout as e:

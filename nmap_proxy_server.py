@@ -22,6 +22,7 @@ import argparse
 import base64
 import shutil
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 
@@ -32,6 +33,17 @@ import secrets_store
 
 app = Flask(__name__)
 NMAP_BIN = shutil.which("nmap") or "nmap"
+
+# Registro dei processi nmap in corso, indicizzati per request_id (di norma
+# il nome del job — vedi nmap_proxy_client.py — dato che un solo job con
+# quel nome può essere in esecuzione alla volta). Necessario perché
+# interrompere il job dentro il container NON termina il vero processo
+# nmap qui sull'host: sono due alberi di processi separati, collegati solo
+# da questa richiesta HTTP, altrimenti "abbandonata" (nmap continuerebbe
+# comunque fino al proprio timeout naturale). Lock perché Flask gestisce le
+# richieste in thread diversi.
+_active_processes = {}
+_active_processes_lock = threading.Lock()
 
 
 def _relocate_stdout_xml(args):
@@ -70,11 +82,39 @@ def health():
     return jsonify({"ok": True, "nmap": NMAP_BIN, "auth_required": bool(_expected_token())})
 
 
+@app.route("/nmap/cancel", methods=["POST"])
+def cancel_nmap_route():
+    """Termina (se ancora in esecuzione) il processo nmap associato a
+    request_id, registrato da run_nmap_route mentre gira. Chiamato da
+    app.py quando l'utente ferma un job dalla UI, per propagare
+    l'interruzione al vero processo nmap sull'host (altrimenti
+    continuerebbe fino al proprio timeout naturale, vedi il commento su
+    _active_processes)."""
+    payload = request.get_json(force=True, silent=True) or {}
+    request_id = payload.get("request_id")
+    if not request_id:
+        return jsonify({"error": "Campo 'request_id' mancante."}), 400
+
+    with _active_processes_lock:
+        proc = _active_processes.get(request_id)
+
+    if proc is None or proc.poll() is not None:
+        return jsonify({"cancelled": False, "reason": "Nessun processo nmap attivo per questo request_id."})
+
+    try:
+        proc.kill()
+        proc.wait(timeout=5)
+    except Exception as e:
+        return jsonify({"cancelled": False, "reason": str(e)}), 500
+    return jsonify({"cancelled": True})
+
+
 @app.route("/nmap", methods=["POST"])
 def run_nmap_route():
     payload = request.get_json(force=True, silent=True) or {}
     args = payload.get("args")
     timeout = payload.get("timeout") or 120
+    request_id = payload.get("request_id")
 
     if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
         return jsonify({"error": "Campo 'args' mancante o non valido (attesa una lista di stringhe)."}), 400
@@ -108,9 +148,19 @@ def run_nmap_route():
             xml_tmp_path.unlink(missing_ok=True)
         return data
 
+    def _register(proc):
+        if request_id:
+            with _active_processes_lock:
+                _active_processes[request_id] = proc
+
+    def _unregister():
+        if request_id:
+            with _active_processes_lock:
+                _active_processes.pop(request_id, None)
+
     try:
         returncode, stdout, stderr, timed_out, conns_out, conns_in = \
-            nmap_conn_count.run_and_count_connections(cmd, timeout=timeout)
+            nmap_conn_count.run_and_count_connections(cmd, timeout=timeout, on_start=_register)
         xml_bytes = _read_and_cleanup_xml()
         response = {
             "returncode": returncode,
@@ -127,6 +177,8 @@ def run_nmap_route():
         return jsonify({"error": f"Eseguibile nmap non trovato ('{NMAP_BIN}')."}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        _unregister()
 
 
 def main():
