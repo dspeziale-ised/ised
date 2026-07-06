@@ -65,16 +65,23 @@ _STATUS_RANK = {"ok": 0, "timeout": 1, "error": 2}
 # firewall/IDS) mantenendo comunque l'obiettivo di rilevare OS e servizi, a
 # basso effort (T2, --max-parallelism 2, --max-retries basso): vedi il
 # docstring del modulo per il perché SNMP è un preset separato.
+# '--stats-every 15s': nmap stampa periodicamente un riepilogo di
+# avanzamento ("Stats: ... hosts completed, ... undergoing Service Scan",
+# percentuale/ETA per fase) invece di restare silenzioso fino alla fine —
+# essenziale con T2 su un /24 intero, dove una singola invocazione può
+# durare minuti senza alcun output. Visibile nel log del job grazie allo
+# streaming dell'output di nmap non appena prodotto (vedi
+# nmap_proxy_client.run_nmap/nmap_conn_count.run_and_count_connections).
 DEFAULT_MAIN_ARGS = (
     "-sS -T2 --max-parallelism 2 --max-retries 1 --randomize-hosts "
     "-f --data-length 20 "
     "-Pn "
     "-p 21,22,23,25,53,80,110,135,139,143,443,445,993,995,3306,3389,5900,8080 "
     "-sV --version-intensity 2 -O --osscan-guess "
-    "--host-timeout 5m --script default"
+    "--host-timeout 5m --stats-every 15s --script default"
 )
 DEFAULT_SNMP_ARGS = (
-    "-sU -p 161,162 -T2 --max-parallelism 2 --max-retries 1 --host-timeout 3m "
+    "-sU -p 161,162 -T2 --max-parallelism 2 --max-retries 1 --host-timeout 3m --stats-every 15s "
     "--script snmp-info,snmp-sysdescr,snmp-interfaces,snmp-netstat,snmp-processes,"
     "snmp-win32-software,snmp-win32-services,snmp-win32-shares,snmp-win32-users,snmp-ios-config"
 )

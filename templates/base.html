@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <link rel="stylesheet" href="https://cdn.datatables.net/1.13.7/css/dataTables.bootstrap4.min.css">
   <link rel="stylesheet" href="https://cdn.datatables.net/responsive/2.5.0/css/responsive.bootstrap4.min.css">
+  <link rel="stylesheet" href="https://unpkg.com/awesome-notifications@3/dist/style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=PT+Sans+Narrow:wght@400;700&display=swap" rel="stylesheet">
@@ -242,7 +243,28 @@
   <script src="https://cdn.datatables.net/responsive/2.5.0/js/dataTables.responsive.min.js"></script>
   <script src="https://cdn.datatables.net/responsive/2.5.0/js/responsive.bootstrap4.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <script src="https://unpkg.com/awesome-notifications@3/dist/index.js"></script>
   <script>
+    // Dialoghi di conferma più leggibili del confirm() nativo del browser
+    // (AWN - Awesome Notifications), con fallback al confirm() nativo se la
+    // libreria non si è caricata (es. CDN irraggiungibile): un'azione
+    // distruttiva non deve mai restare senza conferma solo perché uno
+    // script esterno non è disponibile.
+    const notifier = (typeof AWN !== 'undefined') ? new AWN({
+      position: 'top-right',
+      durations: { global: 3000, alert: 6000, success: 3000, warning: 5000 },
+    }) : null;
+
+    window.notifierConfirm = function (message, onOk, onCancel) {
+      if (notifier) {
+        notifier.confirm(message, onOk, onCancel || function () {});
+      } else if (window.confirm(message)) {
+        onOk();
+      } else if (onCancel) {
+        onCancel();
+      }
+    };
+
     const DT_LANG_IT = {
       "sEmptyTable": "Nessun dato presente nella tabella",
       "sInfo": "Vista da _START_ a _END_ di _TOTAL_ elementi",

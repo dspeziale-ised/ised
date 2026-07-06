@@ -704,15 +704,16 @@ document.getElementById('customscanTemplateLoadBtn').addEventListener('click', f
 document.getElementById('customscanTemplateDeleteBtn').addEventListener('click', function () {
   const name = document.getElementById('customscanTemplateSelect').value;
   if (!name) { alert('Seleziona un template da eliminare.'); return; }
-  if (!confirm('Eliminare il template "' + name + '"?')) return;
-  fetch("{{ url_for('api_nmap_scan_templates') }}/" + encodeURIComponent(name), { method: 'DELETE' })
-    .then(function (r) { return r.json(); })
-    .then(function (d) {
-      if (!d.ok) { alert(d.reason || 'Non eliminato.'); return; }
-      customscanTemplates = d.templates;
-      customscanRenderTemplateOptions();
-    })
-    .catch(function () { alert('Errore di rete.'); });
+  notifierConfirm('Eliminare il template "' + name + '"?', function () {
+    fetch("{{ url_for('api_nmap_scan_templates') }}/" + encodeURIComponent(name), { method: 'DELETE' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { alert(d.reason || 'Non eliminato.'); return; }
+        customscanTemplates = d.templates;
+        customscanRenderTemplateOptions();
+      })
+      .catch(function () { alert('Errore di rete.'); });
+  });
 });
 
 document.getElementById('customscanTemplateSaveBtn').addEventListener('click', function () {
@@ -852,21 +853,23 @@ function netscanRenderTable() {
 
 function netscanDeleteSubnets(cidrs) {
   if (!cidrs.length) return;
-  if (!confirm('Eliminare ' + cidrs.length + ' subnet dalla tabella? L\'operazione non elimina gli host/dati già scansionati, solo la voce dall\'elenco delle reti registrate.')) {
-    return;
-  }
-  fetch("{{ url_for('api_known_subnets_delete') }}", {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ cidrs: cidrs }),
-  })
-    .then(function (r) { return r.json(); })
-    .then(function (d) {
-      if (!d.ok) { alert(d.reason || 'Errore durante l\'eliminazione.'); return; }
-      cidrs.forEach(function (c) { netscanSelectedCidrs.delete(c); });
-      netscanLoadSubnets();
-    })
-    .catch(function () { alert('Errore di rete.'); });
+  notifierConfirm(
+    'Eliminare ' + cidrs.length + ' subnet dalla tabella? L\'operazione non elimina gli host/dati già scansionati, solo la voce dall\'elenco delle reti registrate.',
+    function () {
+      fetch("{{ url_for('api_known_subnets_delete') }}", {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cidrs: cidrs }),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (!d.ok) { alert(d.reason || 'Errore durante l\'eliminazione.'); return; }
+          cidrs.forEach(function (c) { netscanSelectedCidrs.delete(c); });
+          netscanLoadSubnets();
+        })
+        .catch(function () { alert('Errore di rete.'); });
+    }
+  );
 }
 
 document.getElementById('netscanSelectAllHeader').addEventListener('change', function () {

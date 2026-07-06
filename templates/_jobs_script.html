@@ -58,18 +58,20 @@ function initJobWidgets(jobs) {
 
     if (stopBtn) {
       stopBtn.addEventListener('click', function () {
-        if (!confirm('Interrompere questa operazione? I dati già salvati restano nel database; il resto del batch corrente andrà rifatto al prossimo avvio.')) {
-          return;
-        }
-        stopBtn.disabled = true;
-        fetch('/jobs/' + name + '/stop', { method: 'POST' })
-          .then(function (r) { return r.json(); })
-          .then(function (d) {
-            if (!d.stopped) { alert(d.reason || 'Non interrotto.'); }
-            stopBtn.disabled = false;
-            refreshStatus();
-          })
-          .catch(function () { alert('Errore di rete.'); stopBtn.disabled = false; });
+        notifierConfirm(
+          'Interrompere questa operazione? I dati già salvati restano nel database; il resto del batch corrente andrà rifatto al prossimo avvio.',
+          function () {
+            stopBtn.disabled = true;
+            fetch('/jobs/' + name + '/stop', { method: 'POST' })
+              .then(function (r) { return r.json(); })
+              .then(function (d) {
+                if (!d.stopped) { alert(d.reason || 'Non interrotto.'); }
+                stopBtn.disabled = false;
+                refreshStatus();
+              })
+              .catch(function () { alert('Errore di rete.'); stopBtn.disabled = false; });
+          }
+        );
       });
     }
 

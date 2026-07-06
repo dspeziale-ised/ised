@@ -181,15 +181,26 @@ def run_nmap_route():
         if request_id:
             with _active_processes_lock:
                 _active_processes[request_id] = proc
+            with _progress_lines_lock:
+                _progress_lines[request_id] = []
 
     def _unregister():
         if request_id:
             with _active_processes_lock:
                 _active_processes.pop(request_id, None)
+            with _progress_lines_lock:
+                _progress_lines.pop(request_id, None)
+
+    def _on_output_line(line):
+        if request_id:
+            with _progress_lines_lock:
+                _progress_lines.setdefault(request_id, []).append(line)
 
     try:
         returncode, stdout, stderr, timed_out, conns_out, conns_in = \
-            nmap_conn_count.run_and_count_connections(cmd, timeout=timeout, on_start=_register)
+            nmap_conn_count.run_and_count_connections(
+                cmd, timeout=timeout, on_start=_register, on_output_line=_on_output_line,
+            )
         xml_bytes = _read_and_cleanup_xml()
         response = {
             "returncode": returncode,
