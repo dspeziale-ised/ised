@@ -16,15 +16,19 @@ from pathlib import Path
 from flask import Flask, Response, abort, g, jsonify, redirect, render_template, request, url_for
 
 import classify
+import custom_scan
 import cve_lookup
 import host_monitor
+import known_subnets
 import monitor_schedule
+import nmap_parser
 import nmap_proxy_client
 import notify_gmail
 import notify_telegram
 import report_generator
 import report_schedule
 import scan_effort
+import scan_pipeline
 import scanner_db
 
 BASE_DIR = Path(__file__).parent
@@ -286,6 +290,12 @@ JOBS = {
         "lock_file": BASE_DIR / "customscan.lock",
         "log_file": LOGS_DIR / "customscan_log.txt",
         "label": "Scansione nmap personalizzata",
+    },
+    "netscan": {
+        "cmd": [sys.executable, str(BASE_DIR / "known_subnets.py")],
+        "lock_file": BASE_DIR / "known_subnets_scan.lock",
+        "log_file": LOGS_DIR / "netscan_log.txt",
+        "label": "Scansione reti registrate",
     },
 }
 _job_processes = {}
@@ -612,12 +622,26 @@ def build_customscan_args(values):
     CIDR/hostname, obbligatorio, validato da validate_customscan) e 'args'
     (stringa di flag nmap costruita lato client dal form 'Scansione nmap' -
     vedi templates/custom_scan.html - più eventuali argomenti extra digitati
-    a mano, per coprire opzioni non esposte esplicitamente in UI)."""
+    a mano, per coprire opzioni non esposte esplicitamente in UI).
+    'auto_enrich' (checkbox, attivo di default): se non disattivato
+    esplicitamente, custom_scan.py segue una prima scansione leggera (senza
+    -O/-sV) con una seconda passata mirata sugli host trovati.
+
+    Usa la forma '--flag=valore' (un solo token) invece di ['--flag',
+    valore] (due token separati): quando 'valore' è un singolo flag nmap
+    senza spazi (es. '-sn', '-Pn'), argparse lo scambia per un'opzione
+    sconosciuta invece che per il valore atteso — fallisce con "expected
+    one argument" ANCHE se il valore è sintatticamente corretto (verificato:
+    capita con '-sn' o '-Pn' da soli, non con stringhe più lunghe con spazi
+    come '-Pn -T3', il che l'ha reso facile da non notare inizialmente). La
+    forma con '=' non ha questa ambiguità."""
     target = (values.get("target") or "").strip()
     extra_args = (values.get("args") or "").strip()
-    args = ["--target", target]
+    args = [f"--target={target}"]
     if extra_args:
-        args += ["--args", extra_args]
+        args.append(f"--args={extra_args}")
+    if values.get("auto_enrich") == "0":
+        args.append("--no-auto-enrich")
     return args
 
 
@@ -627,16 +651,70 @@ def validate_customscan(values):
     return None
 
 
+def build_netscan_args(values):
+    """Costruisce gli argomenti CLI per known_subnets.py: 'only_active'
+    (checkbox, opzionale: se '1' scandisce solo le subnet con host attivi
+    noti da un rilevamento precedente, saltando quelle note come vuote),
+    'args' (passata principale TCP/OS/servizi) e 'snmp_args' (passata SNMP
+    separata — vedi known_subnets.py per il perché SNMP va sempre in una
+    invocazione nmap indipendente, non mescolata con la principale). Stessa
+    forma '--flag=valore' a token unico per lo stesso motivo di
+    build_customscan_args. 'snmp_args' vuoto ('') è un valore legittimo
+    (disabilita la passata SNMP): va passato comunque per sovrascrivere il
+    default di known_subnets.py, non semplicemente omesso come per 'args'.
+
+    'cidrs' (lista separata da virgole, dalle caselle di selezione della
+    tabella subnet) ha priorità su 'limit': se l'utente ha selezionato
+    manualmente delle subnet, si scandiscono ESATTAMENTE quelle, ignorando
+    la selezione automatica per priorità/limite (vedi known_subnets.py)."""
+    args = []
+    if values.get("only_active") == "1":
+        args.append("--only-active")
+    if "args" in values:
+        args.append(f"--args={(values.get('args') or '').strip()}")
+    if values.get("snmp_enabled") == "0":
+        args.append("--snmp-args=")
+    elif "snmp_args" in values:
+        args.append(f"--snmp-args={(values.get('snmp_args') or '').strip()}")
+    cidrs = (values.get("cidrs") or "").strip()
+    if cidrs:
+        args.append(f"--cidrs={cidrs}")
+    else:
+        limit = (values.get("limit") or "").strip()
+        if limit:
+            args.append(f"--limit={limit}")
+    return args
+
+
+def validate_netscan(values):
+    """Serve ESATTAMENTE una delle due: alcune subnet selezionate manualmente
+    ('cidrs') o un numero di subnet per la selezione automatica ('limit') —
+    con i preset a bassa velocità/invisibilità di questo job, lanciarlo su
+    tutte le reti registrate (potenzialmente migliaia) senza che l'utente
+    scelga esplicitamente l'ambito rischierebbe un 'lavoro lunghissimo' non
+    voluto."""
+    if (values.get("cidrs") or "").strip():
+        return None
+    limit = (values.get("limit") or "").strip()
+    if not limit:
+        return ("Seleziona alcune subnet dalla tabella, oppure indica quante subnet scansionare "
+                "in questo avvio (per non far durare l'operazione troppo a lungo).")
+    if not limit.isdigit() or int(limit) < 1:
+        return "Il numero di subnet deve essere un intero positivo."
+    return None
+
+
 JOB_ARGS_BUILDERS = {
     "discovery": build_discovery_args,
     "rescan": build_rescan_args,
     "customscan": build_customscan_args,
+    "netscan": build_netscan_args,
 }
 # Validazioni pre-avvio per job che richiedono campi obbligatori dal form
 # (a differenza degli altri job, avviabili anche senza parametri): se manca
 # qualcosa qui si evita di far partire un processo condannato a fallire
 # subito, restituendo invece un errore chiaro al form.
-JOB_VALIDATORS = {"customscan": validate_customscan}
+JOB_VALIDATORS = {"customscan": validate_customscan, "netscan": validate_netscan}
 
 
 @app.route("/jobs/<name>/start", methods=["POST"])
@@ -780,6 +858,7 @@ def api_hosts():
     device_type = request.values.get("device_type", "").strip()
     os_family = request.values.get("os_family", "").strip()
     os_name = request.values.get("os_name", "").strip()
+    has_os = request.values.get("has_os", "").strip() == "1"
 
     fixed_where = []
     fixed_params = []
@@ -792,6 +871,8 @@ def api_hosts():
     if os_name:
         fixed_where.append("h.os_name = ?")
         fixed_params.append(os_name)
+    if has_os:
+        fixed_where.append("h.os_name IS NOT NULL AND h.os_name != ''")
 
     total_sql = "SELECT COUNT(*) c FROM hosts h" + (
         " WHERE " + " AND ".join(fixed_where) if fixed_where else ""
@@ -870,12 +951,85 @@ def host_detail(ip):
     attack_techniques = scanner_db.get_host_attack_techniques(db, host["id"])
     ttl_baseline, ttl_hops = classify.guess_ttl_baseline(host["ttl"])
     enrichment = scanner_db.get_host_enrichment(db, host["id"])
+    service_scripts = db.execute(
+        """SELECT ss.script_id, ss.output, ss.collected_at, s.port, s.protocol
+           FROM service_scripts ss JOIN services s ON s.id = ss.service_id
+           WHERE s.host_id = ? ORDER BY s.port, ss.script_id""",
+        (host["id"],),
+    ).fetchall()
+    has_snmp_port = any(s["port"] == 161 and s["protocol"] == "udp" for s in services)
     return render_template(
         "host_detail.html", host=host, os_matches=os_matches, services=services,
         device_type_options=sorted(DEVICE_COLOR.keys()), roles=roles,
         vulnerabilities=vulnerabilities, attack_techniques=attack_techniques,
         ttl_baseline=ttl_baseline, ttl_hops=ttl_hops, enrichment=enrichment,
+        service_scripts=service_scripts, has_snmp_port=has_snmp_port,
     )
+
+
+@app.route("/hosts/<ip>/snmp-scan", methods=["POST"])
+def host_snmp_scan(ip):
+    """Scansione SNMP mirata su un singolo host, dalla pagina di dettaglio:
+    stesso preset SNMP-only usato da "Scansione reti registrate" (vedi
+    known_subnets.py per il perché SNMP va sempre isolato in una propria
+    invocazione nmap, mai mescolato con uno scan TCP pesante — verificato
+    che altrimenti la risposta SNMP non viene catturata in modo affidabile).
+    Eseguita in modo sincrono nella richiesta stessa (nessun job in
+    background: un solo host, il preset ha un host-timeout di pochi minuti
+    al massimo) — richiede il server threaded (vedi app.run()) per non
+    bloccare le altre richieste nel frattempo.
+
+    NON usa scan_pipeline.run_and_store: quella pipeline chiama upsert_host,
+    che SOSTITUISCE INTERAMENTE le porte/os_matches noti per l'host (pensata
+    per una scansione completa) — su una scansione mirata a sole 161/162/udp
+    cancellerebbe tutte le altre porte già note. Usa invece
+    scanner_db.merge_scanned_services, che aggiorna/aggiunge solo le porte
+    effettivamente scansionate qui."""
+    db = get_db()
+    host = db.execute("SELECT * FROM hosts WHERE ip = ?", (ip,)).fetchone()
+    if host is None:
+        return jsonify({"ok": False, "error": "Host non trovato."}), 404
+
+    has_snmp_port = db.execute(
+        "SELECT 1 FROM services WHERE host_id = ? AND port = 161 AND protocol = 'udp'",
+        (host["id"],),
+    ).fetchone()
+    if not has_snmp_port:
+        return jsonify({"ok": False, "error": "Porta 161/UDP non rilevata su questo host."}), 400
+
+    scans_dir = BASE_DIR / "scans"
+    scans_dir.mkdir(parents=True, exist_ok=True)
+    ts = scan_pipeline.now_iso().replace(":", "-")
+    xml_out = scans_dir / f"snmpscan_{ip.replace('.', '-')}_{ts}.xml"
+    cmd = custom_scan.build_command(known_subnets.DEFAULT_SNMP_ARGS, xml_out, target=ip)
+
+    try:
+        nmap_proxy_client.run_nmap(cmd, capture_output=True, text=True, timeout=240)
+    except subprocess.TimeoutExpired:
+        pass  # XML parziale eventualmente già scritto prima del timeout: si prosegue comunque
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"Errore durante la scansione: {e}"}), 500
+
+    host_up = False
+    if xml_out.exists():
+        parsed_hosts = nmap_parser.parse_nmap_xml(xml_out)
+        if parsed_hosts:
+            host_up = parsed_hosts[0].get("state") == "up"
+            scanner_db.merge_scanned_services(db, host["id"], parsed_hosts[0].get("services", []))
+
+    scripts = db.execute(
+        """SELECT ss.script_id, ss.output, ss.collected_at FROM service_scripts ss
+           JOIN services s ON s.id = ss.service_id
+           WHERE s.host_id = ? AND ss.script_id LIKE ?
+           ORDER BY ss.collected_at DESC""",
+        (host["id"], "snmp%"),
+    ).fetchall()
+
+    return jsonify({
+        "ok": True,
+        "host_up": host_up,
+        "scripts": [dict(r) for r in scripts],
+    })
 
 
 @app.route("/hosts/<ip>/device-type", methods=["POST"])
@@ -1282,6 +1436,8 @@ def nmap_scan_page():
         job_running=is_job_running("customscan"),
         effort_profile=scan_effort.current_profile(),
         templates=scanner_db.list_scan_templates(get_db()),
+        netscan_default_main_args=known_subnets.DEFAULT_MAIN_ARGS,
+        netscan_default_snmp_args=known_subnets.DEFAULT_SNMP_ARGS,
     )
 
 
@@ -1307,6 +1463,51 @@ def api_nmap_scan_template_delete(name):
     if not deleted:
         return jsonify({"ok": False, "reason": "Template non trovato."}), 404
     return jsonify({"ok": True, "templates": scanner_db.list_scan_templates(db)})
+
+
+@app.route("/api/known-subnets")
+def api_known_subnets():
+    """Subnet registrate nell'inventario aziendale (tabella known_subnets,
+    vedi known_subnets.py), per il tab 'Reti registrate' della pagina
+    Scansione nmap: elenco completo, con il numero di host attivi noti da
+    un rilevamento precedente per ciascuna (NON un raggruppamento per
+    sito)."""
+    db = get_db()
+    subnets = scanner_db.list_known_subnets(db)
+    return jsonify({
+        "subnets": subnets,
+        "total": len(subnets),
+        "with_known_hosts": sum(1 for s in subnets if (s.get("known_active_hosts") or 0) > 0),
+    })
+
+
+@app.route("/api/known-subnets/import", methods=["POST"])
+def api_known_subnets_import():
+    """(Ri)importa le subnet note da data/reti.txt: idempotente (upsert su
+    cidr, vedi scanner_db.import_known_subnets), può essere richiamata più
+    volte se il file viene aggiornato senza perdere last_scanned_at delle
+    subnet già presenti."""
+    path = DATA_DIR / "reti.txt"
+    if not path.exists():
+        return jsonify({"ok": False, "reason": f"File non trovato: {path}"}), 404
+    rows = known_subnets.parse_reti_file(path)
+    imported = scanner_db.import_known_subnets(get_db(), rows)
+    return jsonify({"ok": True, "parsed": len(rows), "imported": imported})
+
+
+@app.route("/api/known-subnets/delete", methods=["POST"])
+def api_known_subnets_delete():
+    """Elimina una o più subnet registrate (es. importate per errore, o non
+    più rilevanti) dalla tabella known_subnets: dalla tab 'Reti registrate',
+    sia per riga singola sia per la selezione multipla via caselle."""
+    json_data = request.get_json(silent=True) or {}
+    cidrs = json_data.get("cidrs")
+    if not cidrs:
+        cidrs = [c.strip() for c in (request.form.get("cidrs") or "").split(",") if c.strip()]
+    if not cidrs:
+        return jsonify({"ok": False, "reason": "Nessuna subnet indicata."}), 400
+    deleted = scanner_db.delete_known_subnets(get_db(), cidrs)
+    return jsonify({"ok": True, "deleted": deleted})
 
 
 @app.route("/attack-matrix")
@@ -1686,4 +1887,9 @@ if __name__ == "__main__":
     APP_PORT = int(os.environ.get("APP_PORT", "5200"))
     start_report_scheduler()
     start_monitor_scheduler()
-    app.run(host=APP_HOST, port=APP_PORT, debug=APP_DEBUG)
+    # threaded=True: senza, il server di sviluppo gestisce una richiesta alla
+    # volta - una scansione SNMP sincrona da /hosts/<ip>/snmp-scan (che può
+    # bloccare la richiesta per fino a qualche minuto, vedi host_snmp_scan)
+    # farebbe congelare anche il polling periodico di stato job/dashboard di
+    # ALTRE tab/utenti per tutta la sua durata.
+    app.run(host=APP_HOST, port=APP_PORT, debug=APP_DEBUG, threaded=True)

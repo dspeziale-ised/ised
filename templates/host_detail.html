@@ -158,6 +158,13 @@
     <div class="card card-outline card-success">
       <div class="card-header">
         <h3 class="card-title">Porte e servizi ({{ services|length }})</h3>
+        {% if has_snmp_port %}
+        <div class="card-tools">
+          <button type="button" id="snmpScanBtn" class="btn btn-sm btn-outline-info">
+            <i class="fas fa-network-wired"></i> Scansiona SNMP
+          </button>
+        </div>
+        {% endif %}
       </div>
       <div class="card-body p-0">
         <table class="table table-striped table-sm">
@@ -185,6 +192,37 @@
             {% endfor %}
           </tbody>
         </table>
+      </div>
+      {% if has_snmp_port %}
+      <div class="card-footer py-2" id="snmpScanStatus" style="display:none;"></div>
+      {% endif %}
+    </div>
+
+    <div class="card card-outline card-secondary" id="scriptsCard">
+      <div class="card-header">
+        <h3 class="card-title"><i class="fas fa-scroll"></i> Script NSE catturati (<span id="scriptsCount">{{ service_scripts|length }}</span>)</h3>
+      </div>
+      <div class="card-body p-0" id="scriptsCardBody">
+        {% if not service_scripts %}
+        <p class="text-muted small p-3 mb-0">
+          Nessuno script NSE catturato ancora (es. <code>--script default</code>, script SNMP,
+          risultati di una Scansione nmap personalizzata o di "Scansiona SNMP" qui sopra).
+        </p>
+        {% else %}
+        <table class="table table-striped table-sm mb-0">
+          <thead><tr><th>Porta</th><th>Script</th><th>Output</th><th>Raccolto il</th></tr></thead>
+          <tbody id="scriptsTableBody">
+            {% for sc in service_scripts %}
+            <tr>
+              <td>{{ sc.port }}/{{ sc.protocol }}</td>
+              <td><code>{{ sc.script_id }}</code></td>
+              <td><pre class="mb-0 small" style="white-space:pre-wrap;">{{ sc.output }}</pre></td>
+              <td><small>{{ sc.collected_at or '' }}</small></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
       </div>
     </div>
 
@@ -368,5 +406,40 @@ $(function () {
     if (e.key === 'Escape') showView();
   });
 });
+
+const snmpScanBtn = document.getElementById('snmpScanBtn');
+if (snmpScanBtn) {
+  snmpScanBtn.addEventListener('click', () => {
+    const status = document.getElementById('snmpScanStatus');
+    snmpScanBtn.disabled = true;
+    status.style.display = 'block';
+    status.className = 'card-footer py-2 text-muted';
+    status.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Scansione SNMP in corso su {{ host.ip }}... può richiedere fino a qualche minuto.';
+    fetch("{{ url_for('host_snmp_scan', ip=host.ip) }}", { method: 'POST' })
+      .then(r => r.json().then(d => ({ ok: r.ok, body: d })))
+      .then(({ ok, body }) => {
+        if (!ok || !body.ok) {
+          status.className = 'card-footer py-2 text-danger';
+          status.textContent = (body && body.error) || 'Errore durante la scansione SNMP.';
+          return;
+        }
+        if (!body.scripts.length) {
+          status.className = 'card-footer py-2 text-warning';
+          status.textContent = body.host_up
+            ? 'Scansione completata: nessuna risposta SNMP catturata (community string diversa da quella predefinita, o servizio non raggiungibile in questo momento).'
+            : 'Scansione completata: host non risultato attivo in questo momento.';
+          return;
+        }
+        status.className = 'card-footer py-2 text-success';
+        status.innerHTML = '<i class="fas fa-check"></i> Scansione completata, risultati aggiornati: ricarico la pagina...';
+        location.reload();
+      })
+      .catch(() => {
+        status.className = 'card-footer py-2 text-danger';
+        status.textContent = 'Errore di rete.';
+      })
+      .finally(() => { snmpScanBtn.disabled = false; });
+  });
+}
 </script>
 {% endblock %}

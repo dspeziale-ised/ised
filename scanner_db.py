@@ -337,6 +337,25 @@ CREATE TABLE IF NOT EXISTS traffic_log (
 );
 CREATE INDEX IF NOT EXISTS idx_traffic_log_recorded_at ON traffic_log(recorded_at);
 
+-- Subnet registrate nell'inventario aziendale, importate da data/reti.txt
+-- (vedi known_subnets.py) e usate da "Scansione reti registrate" per
+-- scandirle direttamente dall'inventario invece di doverle digitare a mano
+-- come in Scansione nmap personalizzata. 'known_active_hosts' è il numero
+-- di host attivi rilevati su quella subnet in una scansione precedente
+-- (NON un codice sito/gruppo, nonostante il nome della colonna in una
+-- versione precedente di questo schema potesse suggerirlo) — puramente
+-- informativo/di priorità (es. per saltare subnet note come vuote), non
+-- un identificatore. 'last_scanned_at' traccia l'ultima scansione di
+-- QUESTA subnet fatta tramite questa funzione (non altri job).
+CREATE TABLE IF NOT EXISTS known_subnets (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    cidr               TEXT UNIQUE NOT NULL,
+    known_active_hosts INTEGER,
+    imported_at        TEXT,
+    last_scanned_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_known_subnets_known_active_hosts ON known_subnets(known_active_hosts);
+
 CREATE INDEX IF NOT EXISTS idx_os_matches_host ON os_matches(host_id);
 CREATE INDEX IF NOT EXISTS idx_services_host ON services(host_id);
 CREATE INDEX IF NOT EXISTS idx_hosts_device_type ON hosts(device_type);
@@ -387,6 +406,12 @@ def _get_columns(conn, table):
 
 
 def init_db(conn):
+    # La rinomina va PRIMA di executescript(SCHEMA): SCHEMA contiene un
+    # CREATE INDEX su known_subnets(known_active_hosts) che fallirebbe se la
+    # tabella esiste già con la vecchia colonna site_id non ancora rinominata
+    # (CREATE TABLE IF NOT EXISTS in quel caso è un no-op, ma CREATE INDEX
+    # IF NOT EXISTS referenzia comunque la colonna col nome nuovo).
+    ensure_known_subnets_columns(conn)
     conn.executescript(SCHEMA)
     conn.commit()
     ensure_ai_columns(conn)
@@ -394,6 +419,21 @@ def init_db(conn):
     ensure_fingerprint_columns(conn)
     ensure_traffic_columns(conn)
     ensure_enrichment_columns(conn)
+
+
+def ensure_known_subnets_columns(conn):
+    """Rinomina la colonna known_subnets.site_id in known_active_hosts se un
+    DB già inizializzato con lo schema precedente (site_id era in realtà il
+    numero di host attivi rilevati in una scansione precedente, non un
+    codice sito/gruppo — nome corretto per non fraintendere il dato,
+    vedi SCHEMA). Migrazione idempotente: no-op se già rinominata o se la
+    tabella non esiste ancora (primo avvio, la CREATE TABLE sopra usa già
+    il nome corretto)."""
+    existing = _get_columns(conn, "known_subnets")
+    if "site_id" in existing and "known_active_hosts" not in existing:
+        conn.execute("ALTER TABLE known_subnets RENAME COLUMN site_id TO known_active_hosts")
+        conn.execute("DROP INDEX IF EXISTS idx_known_subnets_site_id")
+        conn.commit()
 
 
 AI_COLUMNS = {
@@ -930,6 +970,49 @@ def upsert_host(conn, host):
     return host_id
 
 
+def merge_scanned_services(conn, host_id, services):
+    """Aggiorna/aggiunge SOLO le porte effettivamente presenti in 'services'
+    (upsert su host_id+port+protocol) più gli eventuali script NSE associati,
+    SENZA toccare le altre porte già note per l'host, i suoi os_matches, o
+    campi a livello host (device_type, os_name, last_scanned, ...) — a
+    differenza di upsert_host, che sostituisce interamente porte/os_matches
+    perché pensata per una scansione COMPLETA dell'host. Usata per scansioni
+    mirate su un sottoinsieme di porte (es. la scansione SNMP singola dal
+    dettaglio host): con upsert_host, scansionando solo 161/162/udp si
+    perderebbero tutte le altre porte già note (fatto scoperto e corretto
+    prima di questo commit, mai arrivato in produzione)."""
+    for s in services:
+        existing = conn.execute(
+            "SELECT id FROM services WHERE host_id = ? AND port = ? AND protocol = ?",
+            (host_id, s.get("port"), s.get("protocol")),
+        ).fetchone()
+        if existing:
+            service_id = existing["id"]
+            conn.execute(
+                """UPDATE services SET state=?, service_name=?, product=?, version=?,
+                       extrainfo=?, tunnel=?, cpe=? WHERE id=?""",
+                (s.get("state"), s.get("service_name"), s.get("product"), s.get("version"),
+                 s.get("extrainfo"), s.get("tunnel"), s.get("cpe"), service_id),
+            )
+        else:
+            cur = conn.execute(
+                """INSERT INTO services (host_id, port, protocol, state, service_name,
+                       product, version, extrainfo, tunnel, cpe)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (host_id, s.get("port"), s.get("protocol"), s.get("state"),
+                 s.get("service_name"), s.get("product"), s.get("version"),
+                 s.get("extrainfo"), s.get("tunnel"), s.get("cpe")),
+            )
+            service_id = cur.lastrowid
+        for script in s.get("scripts", []):
+            conn.execute(
+                """INSERT INTO service_scripts (service_id, script_id, output, collected_at)
+                   VALUES (?, ?, ?, ?)""",
+                (service_id, script.get("id"), script.get("output"), _now()),
+            )
+    conn.commit()
+
+
 def log_scan(conn, started_at, finished_at, target_count, xml_path, command, status):
     conn.execute(
         """INSERT INTO scans (started_at, finished_at, target_count, xml_path, command, status)
@@ -975,6 +1058,94 @@ def delete_scan_template(conn, name):
     cur = conn.execute("DELETE FROM nmap_scan_templates WHERE name = ?", (name,))
     conn.commit()
     return (cur.rowcount or 0) > 0
+
+
+def import_known_subnets(conn, rows):
+    """Importa (o aggiorna) le subnet note: rows è una lista di (cidr,
+    known_active_hosts) (vedi known_subnets.parse_reti_file — il secondo
+    campo è il numero di host attivi rilevati su quella subnet in una
+    scansione precedente, NON un codice sito/gruppo). Upsert su cidr (chiave
+    naturale, unica): una subnet già presente aggiorna solo
+    known_active_hosts/imported_at, 'last_scanned_at' non viene toccato (un
+    reimport non deve far perdere lo storico di quando è stata scansionata
+    l'ultima volta tramite questa funzione). Ritorna il numero di righe
+    importate/aggiornate."""
+    now = _now()
+    for cidr, known_active_hosts in rows:
+        conn.execute(
+            """INSERT INTO known_subnets (cidr, known_active_hosts, imported_at)
+               VALUES (?, ?, ?)
+               ON CONFLICT(cidr) DO UPDATE SET
+                   known_active_hosts = excluded.known_active_hosts, imported_at = excluded.imported_at""",
+            (cidr, known_active_hosts, now),
+        )
+    conn.commit()
+    return len(rows)
+
+
+def list_known_subnets(conn, only_with_known_hosts=False, limit=None):
+    """Ritorna le subnet note: [{id, cidr, known_active_hosts, imported_at,
+    last_scanned_at}, ...]. Se only_with_known_hosts, esclude le subnet con
+    known_active_hosts nullo/zero (note come vuote dall'ultimo rilevamento)
+    — utile per non perdere tempo a scansionare a basso effort reti già note
+    come prive di host, invece del vecchio filtro per 'sito' (mai stato un
+    vero raggruppamento, era un fraintendimento del dato — vedi SCHEMA).
+    Ordinate per priorità di scansione (mai scansionate prima, poi le meno
+    recenti) e non per cidr: così limit (se indicato) seleziona sempre le
+    subnet più "in ritardo", e avvii ripetuti con lo stesso limit
+    progrediscono naturalmente sulle successive invece di scansionare
+    sempre le stesse prime N in ordine alfabetico."""
+    sql = "SELECT id, cidr, known_active_hosts, imported_at, last_scanned_at FROM known_subnets"
+    if only_with_known_hosts:
+        sql += " WHERE known_active_hosts > 0"
+    sql += " ORDER BY CASE WHEN last_scanned_at IS NULL THEN 0 ELSE 1 END, last_scanned_at, cidr"
+    params = ()
+    if limit is not None:
+        sql += " LIMIT ?"
+        params = (limit,)
+    rows = conn.execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_subnet_scanned(conn, cidr):
+    conn.execute("UPDATE known_subnets SET last_scanned_at = ? WHERE cidr = ?", (_now(), cidr))
+    conn.commit()
+
+
+def delete_known_subnets(conn, cidrs):
+    """Elimina le subnet note indicate (lista di CIDR) dalla tabella
+    known_subnets — es. voci importate per errore o non più rilevanti.
+    Ritorna il numero di righe effettivamente eliminate."""
+    if not cidrs:
+        return 0
+    placeholders = ",".join("?" for _ in cidrs)
+    cur = conn.execute(f"DELETE FROM known_subnets WHERE cidr IN ({placeholders})", list(cidrs))
+    conn.commit()
+    return cur.rowcount or 0
+
+
+def clear_known_subnets(conn):
+    """Elimina TUTTE le subnet note — reset completo prima di un reimport da
+    una sorgente diversa (es. cambio file), a differenza di
+    delete_known_subnets (cidr specifici) o dell'upsert di
+    import_known_subnets (aggiorna/aggiunge senza rimuovere quelle assenti
+    dal nuovo file). Ritorna il numero di righe eliminate."""
+    cur = conn.execute("DELETE FROM known_subnets")
+    conn.commit()
+    return cur.rowcount or 0
+
+
+def clear_hosts(conn):
+    """Elimina TUTTI gli host e, per cascata (ON DELETE CASCADE, vedi
+    SCHEMA), tutte le tabelle che li referenziano: os_matches, services (e
+    a sua volta service_scripts), host_roles, host_vulnerabilities,
+    host_attack_techniques, host_status_checks. Reset completo
+    dell'inventario, es. prima di ripartire da una nuova scansione dopo un
+    cambio di sorgente delle subnet note. Ritorna il numero di host
+    eliminati (non conta le righe cascata nelle altre tabelle)."""
+    cur = conn.execute("DELETE FROM hosts")
+    conn.commit()
+    return cur.rowcount or 0
 
 
 def log_traffic(conn, source, packets_sent, bytes_sent, packets_rcvd, bytes_rcvd, duration_seconds=0,

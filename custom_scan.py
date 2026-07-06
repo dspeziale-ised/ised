@@ -22,6 +22,18 @@ contatore di pacchetti/byte "in diretta" durante una singola invocazione
 (es. un intero /24 con timing basso/--max-rate) invece che vederla come
 un'unica attesa senza nessun dato fino alla fine.
 
+ARRICCHIMENTO AUTOMATICO A PIÙ RIPRESE (auto_enrich, attivo di default): se
+la tecnica/opzioni scelte non includono già rilevamento OS e versione
+servizi (-O/-sV/-A), dopo che un batch trova host "up" viene lanciata in
+automatico una SECONDA passata mirata solo su quegli host con -O -sV
+aggiunti — così una prima scansione volutamente leggera (es. solo -sn o
+-Pn senza -sV, magari per un target enorme dove una scansione porte
+completa sarebbe troppo lenta/invasiva) non lascia gli host "poveri" di
+dati per sempre: vengono arricchiti in un secondo momento, sugli stessi
+host già trovati, con la stessa logica con cui Discovery iniziale ->
+Aggiorna scansione arricchiscono in due passate distinte — solo che qui
+avviene nella stessa esecuzione, non serve un secondo avvio manuale.
+
 Uso:
     python custom_scan.py --target "10.1.26.0/24" --args "-sS -sV -O -T4 --top-ports 200"
     python custom_scan.py --target "10.1.26.5 10.1.26.6" --args "-p 22,80,443 -sV"
@@ -36,6 +48,7 @@ from pathlib import Path
 import enrich
 import nmap_parser
 import nmap_proxy_client
+import scan_effort
 import scan_pipeline
 import scanner_db
 from job_lock import JobLock
@@ -133,6 +146,52 @@ def expand_targets(target, extra_args_str, timeout=120):
         xml_path.unlink(missing_ok=True)
 
 
+_PORT_SELECTION_FLAGS = {"-p", "-F", "--top-ports", "-p-"}
+
+
+def build_enrichment_args(extra_args_str):
+    """Se gli argomenti originali NON includono già rilevamento OS e
+    versione servizi (-O/-sV, o -A che li implica entrambi), ritorna gli
+    argomenti nmap per una passata di arricchimento mirata (-O -sV +
+    timing/max-rate/porte ereditati dalla scansione originale, così
+    l'arricchimento resta coerente con l'effort scelto) — altrimenti None
+    (la scansione originale già li produce, nessuna passata aggiuntiva
+    serve). Il chiamante applica questi argomenti SOLO sugli host già
+    trovati 'up' nella prima passata (via -iL), con -Pn (già sappiamo che
+    sono up)."""
+    tokens = shlex.split(extra_args_str or "")
+    if "-O" in tokens or "-sV" in tokens or "-A" in tokens:
+        return None
+
+    args = ["-Pn", "-O", "-sV", "--osscan-guess"]
+
+    timing = next((t for t in tokens if len(t) == 3 and t[:2] == "-T" and t[2].isdigit()), None)
+    args.append(timing if timing else f"-T{scan_effort.current_profile()['customscan_timing']}")
+
+    for i, t in enumerate(tokens):
+        if t == "--max-rate" and i + 1 < len(tokens):
+            args += ["--max-rate", tokens[i + 1]]
+            break
+
+    has_port_selection = any(t in _PORT_SELECTION_FLAGS for t in tokens)
+    if not has_port_selection:
+        args += ["--top-ports", "200"]
+    else:
+        i = 0
+        while i < len(tokens):
+            if tokens[i] in _PORT_SELECTION_FLAGS:
+                if tokens[i] == "-p-":
+                    args.append(tokens[i])
+                    i += 1
+                else:
+                    args += tokens[i:i + 2]
+                    i += 2
+            else:
+                i += 1
+
+    return args
+
+
 def _enrich_and_store(conn, host):
     """Raccoglie le stesse evidenze extra usate per la classificazione AI
     (banner HTTP, condivisioni SMB, banner TCP grezzi — vedi enrich.py) per
@@ -150,31 +209,86 @@ def _enrich_and_store(conn, host):
     return evidence
 
 
-def _run_batch(cmd, xml_out, conn, target_count, timeout):
+def _run_batch(cmd, xml_out, conn, target_count, timeout, scans_dir=None, batch_label="", enrichment_args=None):
     result = scan_pipeline.run_and_store(cmd, xml_out, conn, target_count=target_count, timeout=timeout)
     if result["status"] == "timeout":
-        print(f"Timeout dopo {timeout}s: uso i risultati parziali eventualmente scritti.", flush=True)
+        print(f"{batch_label}Timeout dopo {timeout}s: uso i risultati parziali eventualmente scritti.", flush=True)
     elif result["status"] == "error":
-        print(f"Errore durante la scansione: {result['error_detail']}", flush=True)
+        print(f"{batch_label}Errore durante la scansione: {result['error_detail']}", flush=True)
     for host in result["hosts_up"]:
         print(f"  {host['ip']}: {len(host['services'])} servizi, tipo dedotto '{host['device_type']}'", flush=True)
         if any(s.get("state") == "open" for s in host["services"]):
             evidence = _enrich_and_store(conn, host)
             if evidence:
                 print(f"    arricchito: {', '.join(evidence.keys())}", flush=True)
+
+    if enrichment_args and result["hosts_up"]:
+        result = _run_enrichment_pass(result, enrichment_args, conn, scans_dir, batch_label, timeout)
+
     return result
 
 
-def run_scan(target, extra_args_str, db_path, scans_dir, timeout=1800, batch_size=DEFAULT_BATCH_SIZE):
+def _run_enrichment_pass(first_pass_result, enrichment_args, conn, scans_dir, batch_label, timeout):
+    """Seconda passata -O -sV mirata sugli host trovati 'up' nella prima
+    (vedi build_enrichment_args): aggiorna GLI STESSI record host con
+    OS/servizi, invece di lasciarli con solo lo stato 'up' rilevato da una
+    prima scansione volutamente leggera (es. solo -sn/-Pn senza -sV). Ritorna
+    il risultato della prima passata con hosts_up rimpiazzato dalle versioni
+    arricchite (stessi host, dati aggiornati) — hosts_found/status restano
+    quelli della prima passata, l'arricchimento non aggiunge/toglie host, li
+    completa soltanto."""
+    ips = [h["ip"] for h in first_pass_result["hosts_up"]]
+    print(f"{batch_label}Arricchimento OS/servizi su {len(ips)} host trovati "
+          f"(nmap {' '.join(enrichment_args)})...", flush=True)
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
+        f.write("\n".join(ips))
+        ip_list_file = Path(f.name)
+    ts = scan_pipeline.now_iso().replace(":", "-")
+    xml_out = Path(scans_dir) / f"customscan_enrich_{ts}.xml"
+    cmd = enrichment_args + ["-oX", str(xml_out), "-iL", str(ip_list_file)]
+    try:
+        enrich_result = scan_pipeline.run_and_store(cmd, xml_out, conn, target_count=len(ips), timeout=timeout)
+    finally:
+        ip_list_file.unlink(missing_ok=True)
+
+    if enrich_result["status"] == "timeout":
+        print(f"{batch_label}Timeout durante l'arricchimento: uso i risultati parziali.", flush=True)
+    elif enrich_result["status"] == "error":
+        print(f"{batch_label}Errore durante l'arricchimento: {enrich_result['error_detail']}", flush=True)
+
+    for host in enrich_result["hosts_up"]:
+        os_label = host.get("os_name") or "OS sconosciuto"
+        print(f"  {host['ip']}: arricchito con {len(host['services'])} servizi, {os_label}", flush=True)
+        if any(s.get("state") == "open" for s in host["services"]):
+            evidence = _enrich_and_store(conn, host)
+            if evidence:
+                print(f"    evidenze extra: {', '.join(evidence.keys())}", flush=True)
+
+    merged = dict(first_pass_result)
+    merged["hosts_up"] = enrich_result["hosts_up"] or first_pass_result["hosts_up"]
+    return merged
+
+
+def run_scan(target, extra_args_str, db_path, scans_dir, timeout=1800, batch_size=DEFAULT_BATCH_SIZE,
+             auto_enrich=True):
     """Esegue la scansione, parsa l'XML e salva/aggiorna gli host trovati
     (pipeline comune con scan_and_store.py, vedi scan_pipeline.py). Se il
     target si espande in più host, esegue a batch (vedi il docstring del
-    modulo). Ritorna un dict di riepilogo {'hosts_found', 'hosts_up', 'status'}."""
+    modulo). Se auto_enrich e gli argomenti originali non includono già
+    -O/-sV/-A, ogni batch con host trovati viene seguito da una seconda
+    passata -O -sV mirata su quegli host (vedi build_enrichment_args).
+    Ritorna un dict di riepilogo {'hosts_found', 'hosts_up', 'status'}."""
     scans_dir = Path(scans_dir)
     scans_dir.mkdir(parents=True, exist_ok=True)
 
     conn = scanner_db.connect(db_path)
     scanner_db.init_db(conn)
+
+    enrichment_args = build_enrichment_args(extra_args_str) if auto_enrich else None
+    if auto_enrich and enrichment_args is None:
+        print("Rilevamento OS/versione già incluso negli argomenti scelti: nessuna passata di "
+              "arricchimento automatico aggiuntiva.", flush=True)
 
     expanded = expand_targets(target, extra_args_str)
     if len(expanded) > MAX_HOSTS_TO_BATCH:
@@ -187,7 +301,8 @@ def run_scan(target, extra_args_str, db_path, scans_dir, timeout=1800, batch_siz
         xml_out = scans_dir / f"customscan_{ts}.xml"
         cmd = build_command(extra_args_str, xml_out, target=target)
         print(f"Comando: nmap {' '.join(cmd)}", flush=True)
-        result = _run_batch(cmd, xml_out, conn, None, timeout)
+        result = _run_batch(cmd, xml_out, conn, None, timeout, scans_dir=scans_dir,
+                             enrichment_args=enrichment_args)
         conn.close()
         return {
             "hosts_found": result["hosts_found"], "hosts_up": len(result["hosts_up"]),
@@ -209,9 +324,11 @@ def run_scan(target, extra_args_str, db_path, scans_dir, timeout=1800, batch_siz
         ts = scan_pipeline.now_iso().replace(":", "-")
         xml_out = scans_dir / f"customscan_batch{idx:03d}_{ts}.xml"
         cmd = build_command(extra_args_str, xml_out, ip_list_file=ip_list_file)
-        print(f"[batch {idx}/{len(batches)}] {len(batch_ips)} host -> nmap {' '.join(cmd)}", flush=True)
+        batch_label = f"[batch {idx}/{len(batches)}] "
+        print(f"{batch_label}{len(batch_ips)} host -> nmap {' '.join(cmd)}", flush=True)
         try:
-            result = _run_batch(cmd, xml_out, conn, len(batch_ips), timeout)
+            result = _run_batch(cmd, xml_out, conn, len(batch_ips), timeout, scans_dir=scans_dir,
+                                 batch_label=batch_label, enrichment_args=enrichment_args)
         finally:
             ip_list_file.unlink(missing_ok=True)
         total_found += result["hosts_found"]
@@ -238,11 +355,15 @@ def main():
     parser.add_argument("--timeout", type=int, default=1800, help="Timeout (s) di ogni invocazione nmap (per batch)")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE,
                          help="Host per invocazione nmap quando il target si espande in più host (default 20)")
+    parser.add_argument("--no-auto-enrich", action="store_true",
+                         help="Disabilita la seconda passata automatica -O -sV sugli host trovati quando "
+                              "gli argomenti scelti non la includono già (attiva per default)")
     args = parser.parse_args()
 
     with JobLock(LOCK_FILE):
         print(f"Avvio scansione nmap personalizzata su: {args.target}", flush=True)
-        result = run_scan(args.target, args.args, args.db, args.scans_dir, args.timeout, args.batch_size)
+        result = run_scan(args.target, args.args, args.db, args.scans_dir, args.timeout, args.batch_size,
+                           auto_enrich=not args.no_auto_enrich)
         print(
             f"Completato ({result['status']}): {result['hosts_up']}/{result['hosts_found']} "
             f"host up registrati/aggiornati."

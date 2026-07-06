@@ -62,6 +62,12 @@
           <span class="badge job-status-badge ml-1" data-job="customscan"></span>
         </a>
       </li>
+      <li class="nav-item">
+        <a class="nav-link" id="tab-customscan-netscan-btn" data-toggle="tab" href="#tab-customscan-netscan" role="tab">
+          <i class="fas fa-sitemap"></i> Reti registrate
+          <span class="badge job-status-badge ml-1" data-job="netscan"></span>
+        </a>
+      </li>
     </ul>
   </div>
   <div class="card-body p-0">
@@ -363,6 +369,19 @@
       <input type="hidden" id="customscanArgsPreview">
     </div>
 
+    <div class="cs-section">
+      <h6 class="text-primary"><i class="fas fa-layer-group"></i> Arricchimento automatico</h6>
+      <div class="form-check">
+        <input type="checkbox" class="form-check-input" id="customscanAutoEnrich" checked>
+        <label class="form-check-label small" for="customscanAutoEnrich">
+          Se la tecnica scelta sopra non include già rilevamento OS/versione (-O/-sV/-A), esegui in
+          automatico una seconda passata mirata con -O -sV sugli host trovati, invece di lasciarli
+          con solo lo stato "up" rilevato.
+        </label>
+      </div>
+      <input type="hidden" id="customscanAutoEnrichValue" value="1">
+    </div>
+
     <button class="btn btn-warning job-start-btn mb-2" data-job="customscan">
       <i class="fas fa-play"></i> Avvia scansione
     </button>
@@ -380,6 +399,148 @@
 
       <div class="tab-pane fade p-3" id="tab-customscan-log" role="tabpanel">
         <pre class="op-log job-log" data-job="customscan"></pre>
+      </div>
+
+      <div class="tab-pane fade p-3" id="tab-customscan-netscan" role="tabpanel">
+        <p class="text-muted small">
+          Scandisce le subnet <strong>registrate nell'inventario aziendale</strong> (importate da
+          <code>data/reti.txt</code>) invece di un target digitato a mano. Ha opzioni nmap
+          <strong>proprie</strong> (non quelle della tab "Configurazione scansione"), pensate per
+          essere il più discrete possibile mantenendo comunque l'obiettivo di rilevare OS e servizi,
+          più SNMP. Ogni subnet è scansionata come invocazione nmap indipendente: risultati e
+          traffico si aggiornano subnet per subnet, non solo a fine scansione.
+        </p>
+
+        <div class="cs-section">
+          <h6 class="text-primary"><i class="fas fa-user-ninja"></i> Passata principale (TCP: invisibilità, OS, servizi)</h6>
+          <p class="small text-muted mb-1">
+            <strong>-T2</strong> (timing lento/discreto) + evasione firewall/IDS (<code>-f</code>
+            frammentazione, <code>--data-length</code> padding, <code>--randomize-hosts</code>,
+            <code>-Pn</code> per saltare del tutto la fase di ping — niente probe di discovery
+            separate, ogni host viene sondato direttamente) + <strong>--max-parallelism 2</strong>
+            (al massimo 2 host sondati in parallelo, come richiesto) + <code>-sV -O</code> per
+            identificare sistema operativo/servizi. <code>--script default</code> raccoglie
+            banner/informazioni generiche sulle porte TCP realmente aperte.
+          </p>
+          <textarea class="form-control form-control-sm" id="netscanArgsMain" rows="3" spellcheck="false"></textarea>
+          <button type="button" class="btn btn-outline-secondary btn-sm mt-1" id="netscanResetMainBtn">
+            <i class="fas fa-rotate-left"></i> Ripristina preset
+          </button>
+        </div>
+
+        <div class="cs-section">
+          <h6 class="text-primary"><i class="fas fa-network-wired"></i> Passata SNMP (separata)</h6>
+          <p class="small text-muted mb-1">
+            <strong>Eseguita in una invocazione nmap indipendente</strong>, non mescolata con quella
+            sopra: verificato che un singolo comando che combina scansione TCP+UDP pesante con
+            <code>--script snmp-*</code> non cattura in modo affidabile la risposta SNMP (probabile
+            rate-limiting sul control-plane di molti apparati di rete quando ricevono troppe probe
+            in sequenza) — una passata dedicata e leggera è invece affidabile, ed è anche più
+            discreta. Copre porta UDP 161/162 con gli script SNMP che raccolgono sysDescr,
+            interfacce, connessioni di rete, processi, condivisioni/utenti/servizi Windows (via
+            SNMP), configurazione Cisco IOS.
+          </p>
+          <div class="form-check mb-2">
+            <input type="checkbox" class="form-check-input" id="netscanSnmpEnabled" checked>
+            <label class="form-check-label small" for="netscanSnmpEnabled">
+              Esegui anche la passata SNMP separata (raccomandato)
+            </label>
+          </div>
+          <input type="hidden" id="netscanSnmpEnabledValue" value="1">
+          <textarea class="form-control form-control-sm" id="netscanArgsSnmp" rows="2" spellcheck="false"></textarea>
+          <button type="button" class="btn btn-outline-secondary btn-sm mt-1" id="netscanResetSnmpBtn">
+            <i class="fas fa-rotate-left"></i> Ripristina preset
+          </button>
+        </div>
+
+        <div class="cs-section">
+          <h6 class="text-primary"><i class="fas fa-sitemap"></i> Quali subnet</h6>
+          <div class="form-check mb-2">
+            <input type="checkbox" class="form-check-input" id="netscanOnlyActive">
+            <label class="form-check-label small" for="netscanOnlyActive">
+              Mostra/scansiona solo le subnet con host attivi noti da un rilevamento precedente
+              (salta quelle note come vuote, per non perdere tempo a basso effort su reti
+              probabilmente senza nulla)
+            </label>
+          </div>
+          <input type="hidden" id="netscanOnlyActiveValue" value="0">
+          <div class="form-row align-items-end mb-2">
+            <div class="col-md-6">
+              <button type="button" class="btn btn-outline-secondary btn-sm" id="netscanImportBtn">
+                <i class="fas fa-file-import"></i> (Ri)importa da data/reti.txt
+              </button>
+            </div>
+          </div>
+          <p class="small text-muted mb-2" id="netscanImportResult"></p>
+          <p class="small text-muted mb-2">
+            <i class="fas fa-hand-pointer"></i> Seleziona con le caselle le subnet specifiche da
+            scansionare in questo avvio. Se non selezioni nulla, viene usata la selezione
+            automatica per priorità (vedi sotto, "Quante subnet scansionare").
+          </p>
+          <div class="mb-2">
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="netscanSelectAllBtn">
+              <i class="fas fa-check-square"></i> Seleziona tutte (visibili)
+            </button>
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="netscanSelectNoneBtn">
+              <i class="fas fa-square"></i> Deseleziona tutte
+            </button>
+            <button type="button" class="btn btn-outline-danger btn-sm" id="netscanDeleteSelectedBtn">
+              <i class="fas fa-trash"></i> Elimina selezionate
+            </button>
+            <span class="small text-muted ml-2" id="netscanSelectedCount">0 selezionate</span>
+          </div>
+          <div class="table-responsive mb-2" style="max-height:280px; overflow-y:auto;">
+            <table class="table table-sm table-striped mb-0">
+              <thead>
+                <tr>
+                  <th style="width:2rem;"><input type="checkbox" id="netscanSelectAllHeader"></th>
+                  <th>CIDR</th><th>Host attivi noti (rilevamento precedente)</th><th>Ultima scansione (questa funzione)</th><th></th>
+                </tr>
+              </thead>
+              <tbody id="netscanSubnetsBody">
+                <tr><td colspan="5" class="text-muted">Caricamento...</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <input type="hidden" id="netscanSelectedCidrsValue" value="">
+        </div>
+
+        <div class="cs-section">
+          <h6 class="text-primary"><i class="fas fa-list-ol"></i> Quante subnet scansionare</h6>
+          <p class="small text-muted mb-2">
+            <i class="fas fa-circle-info"></i> Con questi preset (invisibilità/T2/2 host in
+            parallelo) ogni subnet può richiedere diversi minuti: scansionare tutte le reti
+            disponibili in un solo avvio può quindi essere molto lungo. Se non hai selezionato
+            nessuna subnet sopra, indica quante ne vuoi scansionare in questo avvio (le meno
+            recenti/non ancora scansionate hanno la priorità automaticamente); puoi rilanciare più
+            volte per proseguire con le successive. <strong>Ignorato se hai selezionato subnet
+            specifiche con le caselle sopra.</strong>
+          </p>
+          <div class="form-row align-items-end">
+            <div class="col-md-4">
+              <label class="small text-muted mb-1" id="netscanLimitLabel">Numero di subnet (obbligatorio)</label>
+              <input type="number" min="1" step="1" class="form-control form-control-sm" id="netscanLimit" placeholder="es. 5">
+            </div>
+            <div class="col-md-8">
+              <span class="small text-muted" id="netscanAvailableCount">&mdash;</span>
+            </div>
+          </div>
+        </div>
+
+        <button class="btn btn-warning job-start-btn mb-2" data-job="netscan">
+          <i class="fas fa-play"></i> Avvia scansione reti registrate
+        </button>
+        <button class="btn btn-outline-danger job-stop-btn mb-2" data-job="netscan" style="display:none;">
+          <i class="fas fa-stop"></i> Interrompi
+        </button>
+        <p class="small text-muted mb-3">
+          <i class="fas fa-circle-info"></i> Con questi preset (T2, evasione, 2 host in parallelo)
+          ogni subnet è comunque lenta per costruzione: ogni subnet è una invocazione nmap separata
+          con il proprio timeout, quindi una singola rete lenta/irraggiungibile non blocca le altre
+          — ma limita il numero di subnet per avvio (sopra) per non far durare l'intera operazione
+          troppo a lungo.
+        </p>
+        <pre class="op-log job-log" data-job="netscan">(nessun log ancora)</pre>
       </div>
     </div>
   </div>
@@ -575,11 +736,184 @@ document.getElementById('customscanTemplateSaveBtn').addEventListener('click', f
     .catch(function () { alert('Errore di rete.'); });
 });
 
+document.getElementById('customscanAutoEnrich').addEventListener('change', function () {
+  document.getElementById('customscanAutoEnrichValue').value = this.checked ? '1' : '0';
+});
+
 initJobWidgets({
   customscan: { forceCheckbox: null, fields: [
     { id: 'customscanTarget', param: 'target' },
     { id: 'customscanArgsPreview', param: 'args' },
+    { id: 'customscanAutoEnrichValue', param: 'auto_enrich' },
+  ] },
+  netscan: { forceCheckbox: null, fields: [
+    { id: 'netscanArgsMain', param: 'args' },
+    { id: 'netscanArgsSnmp', param: 'snmp_args' },
+    { id: 'netscanSnmpEnabledValue', param: 'snmp_enabled' },
+    { id: 'netscanOnlyActiveValue', param: 'only_active' },
+    { id: 'netscanLimit', param: 'limit' },
+    { id: 'netscanSelectedCidrsValue', param: 'cidrs' },
   ] },
 });
+
+const NETSCAN_DEFAULT_MAIN_ARGS = {{ netscan_default_main_args|tojson }};
+const NETSCAN_DEFAULT_SNMP_ARGS = {{ netscan_default_snmp_args|tojson }};
+
+document.getElementById('netscanArgsMain').value = NETSCAN_DEFAULT_MAIN_ARGS;
+document.getElementById('netscanArgsSnmp').value = NETSCAN_DEFAULT_SNMP_ARGS;
+
+document.getElementById('netscanResetMainBtn').addEventListener('click', function () {
+  document.getElementById('netscanArgsMain').value = NETSCAN_DEFAULT_MAIN_ARGS;
+});
+document.getElementById('netscanResetSnmpBtn').addEventListener('click', function () {
+  document.getElementById('netscanArgsSnmp').value = NETSCAN_DEFAULT_SNMP_ARGS;
+});
+
+document.getElementById('netscanSnmpEnabled').addEventListener('change', function () {
+  document.getElementById('netscanSnmpEnabledValue').value = this.checked ? '1' : '0';
+  document.getElementById('netscanArgsSnmp').disabled = !this.checked;
+});
+
+let netscanTotal = 0;
+let netscanWithKnownHosts = 0;
+
+function netscanUpdateAvailableCount() {
+  const onlyActive = document.getElementById('netscanOnlyActive').checked;
+  const available = onlyActive ? netscanWithKnownHosts : netscanTotal;
+  document.getElementById('netscanAvailableCount').textContent =
+    'Disponibili con questo filtro: ' + available + ' (su ' + netscanTotal + ' registrate in totale).';
+  const limitInput = document.getElementById('netscanLimit');
+  limitInput.max = available || '';
+  if (!limitInput.value && available) limitInput.placeholder = 'es. ' + Math.min(5, available);
+}
+
+document.getElementById('netscanOnlyActive').addEventListener('change', function () {
+  document.getElementById('netscanOnlyActiveValue').value = this.checked ? '1' : '0';
+  netscanUpdateAvailableCount();
+  netscanRenderTable();
+});
+
+let netscanSubnets = [];
+const netscanSelectedCidrs = new Set();
+
+function netscanVisibleSubnets() {
+  const onlyActive = document.getElementById('netscanOnlyActive').checked;
+  return onlyActive ? netscanSubnets.filter(s => (s.known_active_hosts || 0) > 0) : netscanSubnets;
+}
+
+function netscanUpdateSelection() {
+  const cidrs = Array.from(netscanSelectedCidrs);
+  document.getElementById('netscanSelectedCidrsValue').value = cidrs.join(',');
+  document.getElementById('netscanSelectedCount').textContent = cidrs.length + ' selezionate';
+
+  const limitInput = document.getElementById('netscanLimit');
+  const limitLabel = document.getElementById('netscanLimitLabel');
+  if (cidrs.length) {
+    limitInput.disabled = true;
+    limitLabel.innerHTML = 'Numero di subnet <span class="text-muted">(ignorato: ' + cidrs.length + ' subnet selezionate manualmente sopra)</span>';
+  } else {
+    limitInput.disabled = false;
+    limitLabel.textContent = 'Numero di subnet (obbligatorio)';
+  }
+
+  const visible = netscanVisibleSubnets();
+  const allVisibleSelected = visible.length > 0 && visible.every(s => netscanSelectedCidrs.has(s.cidr));
+  document.getElementById('netscanSelectAllHeader').checked = allVisibleSelected;
+}
+
+function netscanRenderTable() {
+  const tbody = document.getElementById('netscanSubnetsBody');
+  const visible = netscanVisibleSubnets();
+  if (!visible.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="text-muted">Nessuna subnet registrata (usa "Importa da data/reti.txt").</td></tr>';
+    netscanUpdateSelection();
+    return;
+  }
+  tbody.innerHTML = visible.map(function (s) {
+    const checked = netscanSelectedCidrs.has(s.cidr) ? 'checked' : '';
+    return '<tr><td><input type="checkbox" class="netscan-row-check" data-cidr="' + s.cidr + '" ' + checked + '></td>' +
+      '<td>' + s.cidr + '</td><td>' + (s.known_active_hosts ?? '&mdash;') + '</td><td>' + (s.last_scanned_at || '&mdash;') + '</td>' +
+      '<td><button type="button" class="btn btn-outline-danger btn-xs netscan-row-delete" data-cidr="' + s.cidr + '" title="Elimina questa subnet"><i class="fas fa-trash"></i></button></td></tr>';
+  }).join('');
+  tbody.querySelectorAll('.netscan-row-check').forEach(function (cb) {
+    cb.addEventListener('change', function () {
+      if (this.checked) netscanSelectedCidrs.add(this.dataset.cidr);
+      else netscanSelectedCidrs.delete(this.dataset.cidr);
+      netscanUpdateSelection();
+    });
+  });
+  tbody.querySelectorAll('.netscan-row-delete').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      netscanDeleteSubnets([this.dataset.cidr]);
+    });
+  });
+  netscanUpdateSelection();
+}
+
+function netscanDeleteSubnets(cidrs) {
+  if (!cidrs.length) return;
+  if (!confirm('Eliminare ' + cidrs.length + ' subnet dalla tabella? L\'operazione non elimina gli host/dati già scansionati, solo la voce dall\'elenco delle reti registrate.')) {
+    return;
+  }
+  fetch("{{ url_for('api_known_subnets_delete') }}", {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cidrs: cidrs }),
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d.ok) { alert(d.reason || 'Errore durante l\'eliminazione.'); return; }
+      cidrs.forEach(function (c) { netscanSelectedCidrs.delete(c); });
+      netscanLoadSubnets();
+    })
+    .catch(function () { alert('Errore di rete.'); });
+}
+
+document.getElementById('netscanSelectAllHeader').addEventListener('change', function () {
+  netscanVisibleSubnets().forEach(s => this.checked ? netscanSelectedCidrs.add(s.cidr) : netscanSelectedCidrs.delete(s.cidr));
+  netscanRenderTable();
+});
+document.getElementById('netscanSelectAllBtn').addEventListener('click', function () {
+  netscanVisibleSubnets().forEach(s => netscanSelectedCidrs.add(s.cidr));
+  netscanRenderTable();
+});
+document.getElementById('netscanSelectNoneBtn').addEventListener('click', function () {
+  netscanSelectedCidrs.clear();
+  netscanRenderTable();
+});
+document.getElementById('netscanDeleteSelectedBtn').addEventListener('click', function () {
+  if (!netscanSelectedCidrs.size) { alert('Seleziona almeno una subnet da eliminare.'); return; }
+  netscanDeleteSubnets(Array.from(netscanSelectedCidrs));
+});
+
+function netscanLoadSubnets() {
+  fetch("{{ url_for('api_known_subnets') }}")
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      netscanSubnets = d.subnets || [];
+      netscanTotal = d.total || 0;
+      netscanWithKnownHosts = d.with_known_hosts || 0;
+      netscanRenderTable();
+      netscanUpdateAvailableCount();
+    })
+    .catch(function () {});
+}
+
+document.getElementById('netscanImportBtn').addEventListener('click', function () {
+  const btn = this;
+  btn.disabled = true;
+  fetch("{{ url_for('api_known_subnets_import') }}", { method: 'POST' })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      document.getElementById('netscanImportResult').textContent = d.ok
+        ? ('Importate/aggiornate ' + d.imported + ' subnet su ' + d.parsed + ' righe lette da data/reti.txt.')
+        : (d.reason || 'Errore durante l\'import.');
+      netscanLoadSubnets();
+    })
+    .catch(function () { document.getElementById('netscanImportResult').textContent = 'Errore di rete.'; })
+    .finally(function () { btn.disabled = false; });
+});
+
+netscanLoadSubnets();
 </script>
 {% endblock %}

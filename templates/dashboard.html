@@ -3,13 +3,24 @@
 {% block page_title %}Dashboard{% endblock %}
 {% block breadcrumb %}<li class="breadcrumb-item active">Dashboard</li>{% endblock %}
 
+{% block extra_css %}
+<style>
+  .traffic-stat-badge {
+    font-size: .85rem;
+    padding: .45em .8em;
+    box-shadow: 0 1px 2px rgba(0,0,0,.2);
+  }
+  .traffic-stat-badge i { margin-right: .3em; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="row">
   <div class="col-lg-6">
     <div class="card card-outline card-warning mb-3 h-100">
       <div class="card-body py-2 d-flex align-items-center flex-wrap">
         <span class="mr-2 text-nowrap"><i class="fas fa-gauge-high"></i> <strong>Effort di rete globale:</strong></span>
-        <span class="badge badge-{{ 'success' if effort_level == 'low' else ('warning' if effort_level == 'normal' else 'danger') }} mr-3"
+        <span class="badge badge-pill badge-{{ 'success' if effort_level == 'low' else ('warning' if effort_level == 'normal' else 'danger') }} mr-3"
               id="effortCurrentBadge">{{ effort_profile.label }}</span>
         <div class="btn-group btn-group-sm mr-3" role="group" id="effortLevelGroup">
           {% for p in effort_profiles %}
@@ -49,22 +60,30 @@
       <i class="fas fa-network-wired"></i> Traffico scansioni
     </h3>
     <div class="card-tools">
-      <span class="badge badge-secondary mr-1" id="trafficSentBadge">Inviati: —</span>
-      <span class="badge badge-secondary mr-1" id="trafficRcvdBadge">Ricevuti: —</span>
-      <span class="badge badge-secondary mr-1" id="connOutBadge">Connessioni uscita: —</span>
-      <span class="badge badge-secondary" id="connInBadge">Connessioni entrata: —</span>
+      <span class="badge badge-pill badge-danger mr-1 traffic-stat-badge" id="trafficSentBadge">
+        <i class="fas fa-arrow-up"></i> Inviati: —
+      </span>
+      <span class="badge badge-pill badge-primary mr-1 traffic-stat-badge" id="trafficRcvdBadge">
+        <i class="fas fa-arrow-down"></i> Ricevuti: —
+      </span>
+      <span class="badge badge-pill badge-warning mr-1 traffic-stat-badge" id="connOutBadge">
+        <i class="fas fa-right-left"></i> Connessioni uscita: —
+      </span>
+      <span class="badge badge-pill badge-success traffic-stat-badge" id="connInBadge">
+        <i class="fas fa-right-left"></i> Connessioni entrata: —
+      </span>
     </div>
   </div>
-  <div class="card-body py-2">
+  <div class="card-body">
     <div class="row">
       <div class="col-md-6">
-        <canvas id="trafficChart" style="max-height:130px"></canvas>
+        <canvas id="trafficChart" style="max-height:260px; height:260px;"></canvas>
       </div>
       <div class="col-md-6">
-        <canvas id="connChart" style="max-height:130px"></canvas>
+        <canvas id="connChart" style="max-height:260px; height:260px;"></canvas>
       </div>
     </div>
-    <p class="small text-muted mb-0 mt-1">
+    <p class="small text-muted mb-0 mt-2">
       Byte/pacchetti/connessioni al secondo generati dalle scansioni nmap dell'app (non tutto il
       traffico della workstation), ultimi 60 minuti raggruppati in bucket da 2 minuti.
       <strong>Le connessioni sono quasi sempre 0 per Discovery/Aggiorna scansione/Monitoraggio</strong>:

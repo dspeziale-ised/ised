@@ -5,8 +5,13 @@ __pycache__/
 venv/
 
 # Dati/DB nativi: nel container si usa Postgres (DATABASE_URL), non questi file
+# (data/reti.txt e data/subnets.txt fanno eccezione: elenchi statici delle
+# subnet registrate, importati nel DB da known_subnets.py - devono restare
+# nell'immagine)
 instance/
-data/
+data/*
+!data/reti.txt
+!data/subnets.txt
 scans/
 scans_test/
 up_ips.txt

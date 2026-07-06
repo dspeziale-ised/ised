@@ -12,7 +12,7 @@ function initJobWidgets(jobs) {
 
     function setBadges(running) {
       badges.forEach(function (badge) {
-        badge.className = 'badge job-status-badge ' + (running ? 'badge-info' : 'badge-secondary');
+        badge.className = 'badge badge-pill job-status-badge ' + (running ? 'badge-info' : 'badge-secondary');
         badge.setAttribute('data-job', name);
         badge.innerHTML = running
           ? '<i class="fas fa-spinner fa-spin"></i> in corso'
