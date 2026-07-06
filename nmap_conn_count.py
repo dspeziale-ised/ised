@@ -76,7 +76,26 @@ def _poll_connections(pid, stop_event, seen_all, seen_responded):
         stop_event.wait(_POLL_INTERVAL)
 
 
-def run_and_count_connections(cmd, timeout=None, on_start=None):
+def _stream_reader(pipe, buffer_list, on_line=None):
+    """Legge 'pipe' riga per riga finché il processo scrive (invece di un
+    unico read bloccante a fine esecuzione, come farebbe communicate()):
+    necessario per poter mostrare l'output di nmap MAN MANO che viene
+    prodotto (es. le righe periodiche di '--stats-every'), non solo tutto
+    insieme alla fine. Accumula comunque i bytes grezzi in buffer_list (per
+    ricostruire lo stdout/stderr completo come prima), e se 'on_line' è
+    passato lo richiama con ogni riga decodificata (senza terminatore) non
+    appena arriva — usato per la visibilità periodica sull'avanzamento."""
+    for raw_line in iter(pipe.readline, b""):
+        buffer_list.append(raw_line)
+        if on_line:
+            try:
+                on_line(raw_line.decode("utf-8", errors="replace").rstrip("\r\n"))
+            except Exception:
+                pass
+    pipe.close()
+
+
+def run_and_count_connections(cmd, timeout=None, on_start=None, on_output_line=None):
     """Esegue cmd (argv completo, binario incluso) come subprocess,
     monitorando in un thread separato le connessioni di rete aperte dal
     processo. Ritorna (returncode, stdout_bytes, stderr_bytes, timed_out,
@@ -95,11 +114,28 @@ def run_and_count_connections(cmd, timeout=None, on_start=None):
     container e il vero processo nmap (sull'host) sono due alberi di
     processi completamente separati.
 
+    'on_output_line(line)', se passato, viene richiamato per ogni riga di
+    STDOUT non appena viene scritta da nmap (stdout letto in streaming via
+    _stream_reader, non bufferizzato fino alla fine come con communicate())
+    — permette di mostrare l'avanzamento in tempo reale (es. le righe
+    periodiche di nmap con --stats-every) invece di vedere tutto l'output
+    solo al termine della scansione.
+
     Se psutil non è disponibile, connections_out/connections_in sono
     sempre 0 (comportamento della subprocess invariato)."""
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if on_start:
         on_start(proc)
+
+    stdout_chunks = []
+    stderr_chunks = []
+    stdout_thread = threading.Thread(
+        target=_stream_reader, args=(proc.stdout, stdout_chunks, on_output_line), daemon=True,
+    )
+    stderr_thread = threading.Thread(target=_stream_reader, args=(proc.stderr, stderr_chunks, None), daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+
     seen_all = set()
     seen_responded = set()
     stop_event = threading.Event()
@@ -110,13 +146,17 @@ def run_and_count_connections(cmd, timeout=None, on_start=None):
 
     timed_out = False
     try:
-        stdout, stderr = proc.communicate(timeout=timeout)
+        proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         proc.kill()
-        stdout, stderr = proc.communicate()
+        proc.wait()
         timed_out = True
     finally:
         stop_event.set()
         poll_thread.join(timeout=2)
+        stdout_thread.join(timeout=5)
+        stderr_thread.join(timeout=5)
 
+    stdout = b"".join(stdout_chunks)
+    stderr = b"".join(stderr_chunks)
     return proc.returncode, stdout, stderr, timed_out, len(seen_all), len(seen_responded)

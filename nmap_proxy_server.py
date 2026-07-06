@@ -45,6 +45,16 @@ NMAP_BIN = shutil.which("nmap") or "nmap"
 _active_processes = {}
 _active_processes_lock = threading.Lock()
 
+# Righe di stdout accumulate finora per una scansione in corso, indicizzate
+# per request_id: permette a nmap_proxy_client._run_via_proxy di interrogare
+# periodicamente /nmap/progress e mostrare l'avanzamento (es. le righe di
+# 'nmap --stats-every N') PRIMA che l'intera richiesta HTTP completi, dato
+# che altrimenti il client vedrebbe l'intero stdout solo alla fine (una
+# singola risposta HTTP bloccante). Stesso ciclo di vita/lock pattern di
+# _active_processes.
+_progress_lines = {}
+_progress_lines_lock = threading.Lock()
+
 
 def _relocate_stdout_xml(args):
     """Se args contiene '-oX -' (il client chiede l'XML su stdout, per poi
@@ -107,6 +117,25 @@ def cancel_nmap_route():
     except Exception as e:
         return jsonify({"cancelled": False, "reason": str(e)}), 500
     return jsonify({"cancelled": True})
+
+
+@app.route("/nmap/progress")
+def nmap_progress_route():
+    """Righe di stdout accumulate finora per una scansione in corso (vedi
+    _progress_lines), a partire dall'indice 'since': usato dal client per
+    il polling periodico durante l'attesa (vedi
+    nmap_proxy_client._run_via_proxy). Ritorna sempre 200 con lista vuota se
+    request_id non è (più) noto — es. la scansione non è ancora iniziata,
+    o è già terminata e la voce è stata rimossa — non è un errore."""
+    request_id = request.args.get("request_id")
+    since = request.args.get("since", type=int) or 0
+    if not request_id:
+        return jsonify({"lines": [], "next_since": since})
+    with _progress_lines_lock:
+        lines = _progress_lines.get(request_id, [])
+        new_lines = lines[since:]
+        next_since = len(lines)
+    return jsonify({"lines": new_lines, "next_since": next_since})
 
 
 @app.route("/nmap", methods=["POST"])

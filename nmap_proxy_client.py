@@ -28,12 +28,21 @@ import base64
 import os
 import re
 import subprocess
+import threading
 from pathlib import Path
 
 import requests
 
 import nmap_conn_count
 import secrets_store
+
+# Ogni quanti secondi il client interroga /nmap/progress mentre attende il
+# completamento di una scansione in modalità proxy (vedi _run_via_proxy):
+# nmap stesso viene invocato con '--stats-every' su un intervallo simile nei
+# preset di known_subnets.py, così le righe periodiche appaiono nel log del
+# job a una cadenza prevedibile invece di comparire tutte insieme solo a
+# fine scansione.
+PROGRESS_POLL_INTERVAL = 10
 
 # nmap stampa questa riga riepilogativa su stdout solo con -v (mai nell'XML
 # di -oX), es. "Raw packets sent: 1234 (54.312KB) | Rcvd: 1230 (49.200KB)".
@@ -127,20 +136,43 @@ class CompletedProcessLike:
         self.connections_in = connections_in
 
 
+def _stdout_is_xml(args):
+    """True se, con questi argomenti, lo stdout di nmap sarà XML grezzo
+    (`-oX -` passato direttamente dal chiamante, es. host_monitor.py/
+    vuln_scan.py che vogliono parsarlo da stdout) invece del riepilogo
+    testuale leggibile — in quel caso NON va mostrato come "avanzamento"
+    riga per riga (sarebbe un flusso di tag XML, non informativo, e
+    comunque nmap scrive l'XML in un unico blocco a fine scansione, non
+    progressivamente)."""
+    for i, a in enumerate(args):
+        if a == "-oX" and i + 1 < len(args) and args[i + 1] == "-":
+            return True
+    return False
+
+
 def run_nmap(args, timeout=None, capture_output=True, text=True):
     """Esegue nmap con gli argomenti indicati (senza il nome del binario).
     In assenza di NMAP_PROXY_URL, esegue nmap in locale (comportamento
     sostanzialmente identico a subprocess.run, con l'aggiunta del conteggio
     connessioni via nmap_conn_count — vedi CompletedProcessLike). Con
-    NMAP_PROXY_URL impostata, inoltra al proxy."""
+    NMAP_PROXY_URL impostata, inoltra al proxy.
+
+    In entrambe le modalità, se lo stdout di nmap conterrà testo leggibile
+    (non XML grezzo, vedi _stdout_is_xml) l'output viene mostrato riga per
+    riga non appena prodotto (stampato qui, quindi visibile nel log del job
+    chiamante) invece di comparire tutto insieme solo al termine — utile
+    soprattutto con nmap invocato con '--stats-every N' (vedi
+    known_subnets.DEFAULT_MAIN_ARGS/DEFAULT_SNMP_ARGS), che stampa così un
+    riepilogo di avanzamento periodico."""
     if not PROXY_URL:
         return _run_native(args, timeout=timeout, text=text)
     return _run_via_proxy(args, timeout=timeout, text=text)
 
 
 def _run_native(args, timeout, text):
+    on_output_line = None if _stdout_is_xml(args) else (lambda line: print(line, flush=True))
     returncode, stdout, stderr, timed_out, conns_out, conns_in = \
-        nmap_conn_count.run_and_count_connections(["nmap", *args], timeout=timeout)
+        nmap_conn_count.run_and_count_connections(["nmap", *args], timeout=timeout, on_output_line=on_output_line)
     stdout_result = stdout.decode("utf-8", errors="replace") if text else stdout
     stderr_result = stderr.decode("utf-8", errors="replace") if text else stderr
     if timed_out:
@@ -183,6 +215,27 @@ def _expand_input_file(args):
     return args
 
 
+def _fetch_new_progress_lines(request_id, since, headers):
+    """Interroga /nmap/progress per le righe di stdout accumulate finora
+    lato proxy dopo l'indice 'since', le stampa (visibili nel log del job
+    chiamante) e ritorna il nuovo 'since' da usare al prossimo giro. Non
+    solleva mai: un errore nel polling di avanzamento non deve far fallire
+    la scansione vera, solo lasciarla senza aggiornamenti per quel giro."""
+    try:
+        resp = requests.get(
+            f"{PROXY_URL}/nmap/progress", params={"request_id": request_id, "since": since},
+            headers=headers, timeout=10,
+        )
+        if not resp.ok:
+            return since
+        data = resp.json()
+        for line in data.get("lines", []):
+            print(line, flush=True)
+        return data.get("next_since", since)
+    except requests.RequestException:
+        return since
+
+
 def _run_via_proxy(args, timeout, text):
     proxy_args, local_output_path = _extract_output_file(args)
     proxy_args = _expand_input_file(proxy_args)
@@ -193,6 +246,7 @@ def _run_via_proxy(args, timeout, text):
         headers["X-Proxy-Token"] = token
 
     request_timeout = (timeout or 120) + 20  # margine oltre il timeout nmap lato proxy
+    request_id = _current_request_id()
     # 'relocate_xml' dice al proxy di spostare l'XML su un file temporaneo
     # SOLO quando qui '-oX <path reale>' è stato convertito in '-oX -' (per
     # trasmetterlo via HTTP): SOLO in quel caso serve liberare lo stdout
@@ -202,19 +256,47 @@ def _run_via_proxy(args, timeout, text):
     # nessun file), local_output_path è None e la richiesta NON lo chiede —
     # altrimenti quei chiamanti riceverebbero il testo verboso al posto
     # dell'XML che si aspettano di parsare da stdout.
-    try:
-        resp = requests.post(
-            f"{PROXY_URL}/nmap",
-            json={
-                "args": proxy_args, "timeout": timeout, "relocate_xml": bool(local_output_path),
-                "request_id": _current_request_id(),
-            },
-            headers=headers, timeout=request_timeout,
-        )
-    except requests.Timeout as e:
-        raise subprocess.TimeoutExpired(cmd=["nmap", *args], timeout=timeout) from e
-    except requests.RequestException as e:
+    #
+    # La richiesta vera e propria gira in un thread separato mentre il
+    # thread principale interroga /nmap/progress ogni PROGRESS_POLL_INTERVAL
+    # secondi: a differenza della modalità nativa (dove leggiamo lo stdout
+    # di nmap direttamente in streaming), qui il vero processo nmap gira su
+    # un'altra macchina (l'host, via nmap_proxy_server.py) — l'unico modo
+    # per vedere l'avanzamento prima che l'intera richiesta HTTP completi è
+    # interrogare periodicamente cosa il proxy ha accumulato finora.
+    outcome = {}
+
+    def _do_request():
+        try:
+            outcome["resp"] = requests.post(
+                f"{PROXY_URL}/nmap",
+                json={
+                    "args": proxy_args, "timeout": timeout, "relocate_xml": bool(local_output_path),
+                    "request_id": request_id,
+                },
+                headers=headers, timeout=request_timeout,
+            )
+        except requests.RequestException as e:
+            outcome["error"] = e
+
+    request_thread = threading.Thread(target=_do_request, daemon=True)
+    request_thread.start()
+
+    show_progress = bool(local_output_path) and bool(request_id)
+    since = 0
+    if show_progress:
+        while request_thread.is_alive():
+            request_thread.join(timeout=PROGRESS_POLL_INTERVAL)
+            since = _fetch_new_progress_lines(request_id, since, headers)
+    else:
+        request_thread.join()
+
+    if "error" in outcome:
+        e = outcome["error"]
+        if isinstance(e, requests.Timeout):
+            raise subprocess.TimeoutExpired(cmd=["nmap", *args], timeout=timeout) from e
         raise RuntimeError(f"Proxy nmap non raggiungibile ({PROXY_URL}): {e}") from e
+    resp = outcome["resp"]
 
     if resp.status_code == 401:
         raise RuntimeError("Proxy nmap: token di autenticazione mancante/non valido (NMAP_PROXY_TOKEN).")
