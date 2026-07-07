@@ -1923,22 +1923,28 @@ def _run_auto_enrich_cycle_now():
     is_due), protetto da _auto_enrich_running_lock: no-op silenzioso se un
     ciclo è già in corso (periodico o da un precedente avvio immediato),
     invece di sovrapporlo. Usata sia dal checkbox in dashboard (avvio
-    immediato) sia, indirettamente, dallo scheduler periodico."""
+    immediato) sia, indirettamente, dallo scheduler periodico.
+
+    Aggiorna auto_enrich_schedule (last_run_at/last_run_summary) dopo OGNI
+    batch (on_batch_done), non solo alla fine dell'intero ciclo: un ciclo
+    completo può richiedere ore su centinaia di host, senza questo la
+    dashboard mostrerebbe 'nessun ciclo eseguito ancora' per tutta quella
+    durata nonostante i progressi reali già in corso batch per batch."""
     if not _auto_enrich_running_lock.acquire(blocking=False):
         return False
     try:
         config = auto_enrich_schedule.load()
-        now = datetime.datetime.now()
         conn = scanner_db.connect(str(DB_PATH))
         try:
             result = auto_enrich.run_enrich_cycle(
                 conn, str(BASE_DIR / "scans"),
                 timing=config.get("timing") or "3",
                 max_parallelism=config.get("max_parallelism") or 4,
+                on_batch_done=lambda progress: auto_enrich_schedule.mark_run(datetime.datetime.now(), progress),
             )
         finally:
             conn.close()
-        auto_enrich_schedule.mark_run(now, result)
+        auto_enrich_schedule.mark_run(datetime.datetime.now(), result)
         return True
     finally:
         _auto_enrich_running_lock.release()

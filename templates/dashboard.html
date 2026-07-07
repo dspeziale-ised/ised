@@ -71,8 +71,14 @@
     </span>
     <span class="text-muted small ml-auto" id="autoEnrichStatus">
       {% if auto_enrich_config.last_run_summary %}
-      Ultimo ciclo ({{ auto_enrich_config.last_run_at }}):
-      {{ auto_enrich_config.last_run_summary.hosts_enriched }}/{{ auto_enrich_config.last_run_summary.hosts_found }} arricchiti
+      {% set s = auto_enrich_config.last_run_summary %}
+      {% if s.batches_done and s.batches_done < s.batches_total %}
+      In corso (batch {{ s.batches_done }}/{{ s.batches_total }}, {{ auto_enrich_config.last_run_at }}):
+      {{ s.hosts_enriched }}/{{ s.hosts_found }} arricchiti finora
+      {% else %}
+      Ultimo ciclo completo ({{ auto_enrich_config.last_run_at }}):
+      {{ s.hosts_enriched }}/{{ s.hosts_found }} arricchiti
+      {% endif %}
       {% else %}
       Nessun ciclo eseguito ancora.
       {% endif %}
@@ -491,6 +497,29 @@ document.getElementById('autoEnrichEnabled').addEventListener('change', function
     .catch(function () { checkbox.checked = !checkbox.checked; alert('Errore di rete.'); })
     .finally(function () { checkbox.disabled = false; });
 });
+
+function refreshAutoEnrichStatus() {
+  fetch("{{ url_for('api_auto_enrich_schedule') }}")
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      const el = document.getElementById('autoEnrichStatus');
+      const s = d.last_run_summary;
+      if (!s) {
+        el.textContent = 'Nessun ciclo eseguito ancora.';
+        return;
+      }
+      if (s.batches_done && s.batches_done < s.batches_total) {
+        el.textContent = 'In corso (batch ' + s.batches_done + '/' + s.batches_total + ', ' + d.last_run_at + '): ' +
+          s.hosts_enriched + '/' + s.hosts_found + ' arricchiti finora';
+      } else {
+        el.textContent = 'Ultimo ciclo completo (' + d.last_run_at + '): ' +
+          s.hosts_enriched + '/' + s.hosts_found + ' arricchiti';
+      }
+    })
+    .catch(function () {});
+}
+
+setInterval(refreshAutoEnrichStatus, 20000);
 
 {% include "_effort_script.html" %}
 </script>

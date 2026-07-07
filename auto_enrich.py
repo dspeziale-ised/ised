@@ -78,13 +78,23 @@ def find_hosts_without_os(conn):
 
 def run_enrich_cycle(conn, scans_dir, timing=DEFAULT_TIMING, max_parallelism=DEFAULT_MAX_PARALLELISM,
                       batch_size=DEFAULT_BATCH_SIZE, top_ports=DEFAULT_TOP_PORTS,
-                      host_timeout=DEFAULT_HOST_TIMEOUT, max_retries=DEFAULT_MAX_RETRIES, timeout=900):
+                      host_timeout=DEFAULT_HOST_TIMEOUT, max_retries=DEFAULT_MAX_RETRIES, timeout=900,
+                      on_batch_done=None):
     """Esegue un ciclo di arricchimento su tutti gli host senza OS noto, a
     batch (vedi il docstring del modulo per il perché). Ritorna
     {'hosts_found', 'hosts_enriched', 'status'} — hosts_enriched conta solo
     gli host per cui è stato effettivamente determinato un OS (una porta
     filtrata/host irraggiungibile in questo momento non viene contata come
-    arricchita, anche se resta comunque nella tabella per il prossimo ciclo)."""
+    arricchita, anche se resta comunque nella tabella per il prossimo ciclo).
+
+    'on_batch_done(progress)', se passato, viene richiamato dopo OGNI batch
+    (non solo alla fine dell'intero ciclo) con lo stato cumulativo finora
+    {'hosts_found', 'hosts_enriched', 'status', 'batches_done',
+    'batches_total'} — un ciclo completo può richiedere ore su centinaia di
+    host (decine di batch), quindi senza un callback per-batch chi mostra
+    lo stato all'utente (vedi app.py/dashboard) vedrebbe 'nessun ciclo
+    eseguito' per tutta quella durata anche con progressi reali già in
+    corso."""
     scans_dir = Path(scans_dir)
     scans_dir.mkdir(parents=True, exist_ok=True)
 
@@ -94,6 +104,7 @@ def run_enrich_cycle(conn, scans_dir, timing=DEFAULT_TIMING, max_parallelism=DEF
 
     total_enriched = 0
     worst_status = "ok"
+    batches_total = (len(targets) + batch_size - 1) // batch_size
 
     for i in range(0, len(targets), batch_size):
         batch = targets[i:i + batch_size]
@@ -127,7 +138,14 @@ def run_enrich_cycle(conn, scans_dir, timing=DEFAULT_TIMING, max_parallelism=DEF
         if _STATUS_RANK[result["status"]] > _STATUS_RANK[worst_status]:
             worst_status = result["status"]
 
-    return {"hosts_found": len(targets), "hosts_enriched": total_enriched, "status": worst_status}
+        if on_batch_done:
+            on_batch_done({
+                "hosts_found": len(targets), "hosts_enriched": total_enriched, "status": worst_status,
+                "batches_done": i // batch_size + 1, "batches_total": batches_total,
+            })
+
+    return {"hosts_found": len(targets), "hosts_enriched": total_enriched, "status": worst_status,
+            "batches_done": batches_total, "batches_total": batches_total}
 
 
 def main():
