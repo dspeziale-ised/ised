@@ -747,6 +747,22 @@ def job_stop(name):
     return jsonify({"stopped": ok, "reason": reason})
 
 
+@app.route("/jobs/<name>/log", methods=["DELETE"])
+def job_clear_log(name):
+    """Svuota il file di log di un job (es. il pulsante 'Pulisci log' nella
+    tab 'Reti registrate'). Sicuro anche con il job ancora in corso: il
+    processo lo tiene aperto in modalità append, quindi la prossima scrittura
+    continua semplicemente dalla nuova fine (azzerata) del file, senza
+    corromperlo — non serve fermare il job prima di pulire."""
+    if name not in JOBS:
+        return jsonify({"ok": False, "reason": "Job sconosciuto."}), 404
+    try:
+        JOBS[name]["log_file"].write_text("", encoding="utf-8")
+    except OSError as e:
+        return jsonify({"ok": False, "reason": str(e)}), 500
+    return jsonify({"ok": True})
+
+
 @app.route("/api/jobs/<name>/status")
 def job_status(name):
     if name not in JOBS:

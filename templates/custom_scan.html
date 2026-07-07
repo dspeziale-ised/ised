@@ -540,6 +540,12 @@
           — ma limita il numero di subnet per avvio (sopra) per non far durare l'intera operazione
           troppo a lungo.
         </p>
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <span class="small text-muted">Log</span>
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="netscanClearLogBtn">
+            <i class="fas fa-broom"></i> Pulisci log
+          </button>
+        </div>
         <pre class="op-log job-log" data-job="netscan">(nessun log ancora)</pre>
       </div>
     </div>
@@ -918,5 +924,19 @@ document.getElementById('netscanImportBtn').addEventListener('click', function (
 });
 
 netscanLoadSubnets();
+
+document.getElementById('netscanClearLogBtn').addEventListener('click', function () {
+  const btn = this;
+  btn.disabled = true;
+  fetch("{{ url_for('job_clear_log', name='netscan') }}", { method: 'DELETE' })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d.ok) { alert(d.reason || 'Errore durante la pulizia del log.'); return; }
+      const logEl = document.querySelector('.job-log[data-job="netscan"]');
+      if (logEl) logEl.textContent = '(nessun log ancora)';
+    })
+    .catch(function () { alert('Errore di rete.'); })
+    .finally(function () { btn.disabled = false; });
+});
 </script>
 {% endblock %}
