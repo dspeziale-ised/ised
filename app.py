@@ -1887,22 +1887,33 @@ def start_monitor_scheduler():
 
 @app.route("/api/auto-enrich-schedule", methods=["GET", "POST"])
 def api_auto_enrich_schedule():
-    """Checkbox 'Arricchimento automatico' in dashboard: a differenza di
-    /api/monitor-schedule (che espone un intero form), qui la UI invia solo
-    'enabled' — si carica la config esistente e si aggiorna solo quel campo,
+    """Checkbox 'Arricchimento automatico' (e 'Esegui in continuo') in
+    dashboard: a differenza di /api/monitor-schedule (che espone un intero
+    form), qui la UI invia solo i singoli campi cambiati — si carica la
+    config esistente e si aggiornano solo i campi presenti nella richiesta,
     invece di ricostruirla da zero, per non azzerare timing/max_parallelism
-    (non modificabili dalla UI, ma persistenti) ad ogni toggle.
+    (non modificabili dalla UI, ma persistenti) e per non far sì che
+    toccare UNA casella resetti anche l'altra.
 
-    Se il checkbox passa da spento ad acceso, avvia subito un ciclo in
-    background invece di aspettare il prossimo giro dello scheduler (fino a
-    interval_minutes, di default 15) — l'utente che attiva l'arricchimento
-    si aspetta un effetto immediato, non un'attesa silenziosa."""
+    Avvia subito un ciclo in background (invece di aspettare il prossimo
+    giro dello scheduler, fino a interval_minutes) quando: il checkbox
+    principale passa da spento ad acceso, oppure 'continuo' passa da spento
+    ad acceso mentre l'arricchimento è già attivo — l'utente che attiva
+    l'arricchimento (in un modo o nell'altro) si aspetta un effetto
+    immediato, non un'attesa silenziosa."""
     if request.method == "POST":
         config = auto_enrich_schedule.load()
         was_enabled = bool(config.get("enabled"))
-        config["enabled"] = request.form.get("enabled") == "1"
+        was_continuous = bool(config.get("continuous"))
+        if "enabled" in request.form:
+            config["enabled"] = request.form.get("enabled") == "1"
+        if "continuous" in request.form:
+            config["continuous"] = request.form.get("continuous") == "1"
         auto_enrich_schedule.save(config)
-        if config["enabled"] and not was_enabled:
+        turned_on = config.get("enabled") and (
+            not was_enabled or (config.get("continuous") and not was_continuous)
+        )
+        if turned_on:
             threading.Thread(target=_run_auto_enrich_cycle_now, daemon=True).start()
     return jsonify(auto_enrich_schedule.load())
 

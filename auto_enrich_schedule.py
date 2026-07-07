@@ -12,6 +12,7 @@ CONFIG_FILE = "auto_enrich_schedule.json"
 
 DEFAULT_CONFIG = {
     "enabled": True,
+    "continuous": False,
     "interval_minutes": 15,
     "timing": "3",
     "max_parallelism": 4,
@@ -29,8 +30,16 @@ def save(config):
 
 
 def is_due(config, now):
+    """True se un nuovo ciclo può partire. In modalità 'continuous' ignora
+    interval_minutes: appena il ciclo precedente si libera (lock rilasciato
+    in app.py._run_auto_enrich_cycle_now), il prossimo può partire subito,
+    invece di aspettare una pausa fissa tra un ciclo completo e il
+    successivo — utile per svuotare rapidamente un grosso arretrato di host
+    senza OS, o per accorgersi prima di host nuovi scoperti nel frattempo."""
     if not config.get("enabled"):
         return False
+    if config.get("continuous"):
+        return True
     last_run_at = config.get("last_run_at")
     if not last_run_at:
         return True

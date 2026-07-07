@@ -62,9 +62,15 @@
         <i class="fas fa-wand-magic-sparkles"></i> <strong>Arricchimento automatico host senza OS</strong>
       </label>
     </div>
-    <small class="text-muted mr-3 text-nowrap">
-      Ogni {{ auto_enrich_config.interval_minutes }} min &middot; -T{{ auto_enrich_config.timing }} &middot;
-      max {{ auto_enrich_config.max_parallelism }} host in parallelo
+    <div class="form-check mr-3">
+      <input type="checkbox" class="form-check-input" id="autoEnrichContinuous" {{ 'checked' if auto_enrich_config.continuous else '' }}>
+      <label class="form-check-label" for="autoEnrichContinuous">
+        Esegui in continuo (senza attendere l'intervallo)
+      </label>
+    </div>
+    <small class="text-muted mr-3 text-nowrap" id="autoEnrichIntervalText">
+      {% if auto_enrich_config.continuous %}In continuo{% else %}Ogni {{ auto_enrich_config.interval_minutes }} min{% endif %}
+      &middot; -T{{ auto_enrich_config.timing }} &middot; max {{ auto_enrich_config.max_parallelism }} host in parallelo
     </small>
     <span class="badge badge-pill badge-{{ 'warning' if hosts_without_os else 'success' }} mr-3">
       {{ hosts_without_os }} host senza OS
@@ -486,16 +492,27 @@ function refreshTrafficStats() {
 refreshTrafficStats();
 setInterval(refreshTrafficStats, 15000);
 
-document.getElementById('autoEnrichEnabled').addEventListener('change', function () {
-  const checkbox = this;
+function autoEnrichPostToggle(checkbox, param) {
   const body = new URLSearchParams();
-  body.set('enabled', checkbox.checked ? '1' : '0');
+  body.set(param, checkbox.checked ? '1' : '0');
   checkbox.disabled = true;
   fetch("{{ url_for('api_auto_enrich_schedule') }}", { method: 'POST', body: body })
     .then(function (r) { return r.json(); })
-    .then(function (d) { checkbox.checked = !!d.enabled; })
+    .then(function (d) {
+      checkbox.checked = !!d[param];
+      document.getElementById('autoEnrichIntervalText').textContent =
+        (d.continuous ? 'In continuo' : 'Ogni ' + d.interval_minutes + ' min') +
+        ' · -T' + d.timing + ' · max ' + d.max_parallelism + ' host in parallelo';
+    })
     .catch(function () { checkbox.checked = !checkbox.checked; alert('Errore di rete.'); })
     .finally(function () { checkbox.disabled = false; });
+}
+
+document.getElementById('autoEnrichEnabled').addEventListener('change', function () {
+  autoEnrichPostToggle(this, 'enabled');
+});
+document.getElementById('autoEnrichContinuous').addEventListener('change', function () {
+  autoEnrichPostToggle(this, 'continuous');
 });
 
 function refreshAutoEnrichStatus() {
