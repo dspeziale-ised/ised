@@ -832,6 +832,7 @@ def dashboard():
         effort_profiles=scan_effort.all_profiles(),
         hosts_without_os=hosts_without_os,
         auto_enrich_config=auto_enrich_schedule.load(),
+        auto_enrich_running=_auto_enrich_running_lock.locked(),
     )
 
 
@@ -1915,7 +1916,15 @@ def api_auto_enrich_schedule():
         )
         if turned_on:
             threading.Thread(target=_run_auto_enrich_cycle_now, daemon=True).start()
-    return jsonify(auto_enrich_schedule.load())
+    response = auto_enrich_schedule.load()
+    # 'running': un batch può restare in corso per 10+ minuti (nmap -O -sV
+    # su più host) senza che last_run_summary cambi finché non completa —
+    # senza questo flag, la dashboard non ha modo di distinguere "sta
+    # lavorando, aspetta" da "è bloccato/non ha mai iniziato", con lo stesso
+    # messaggio statico ('nessun ciclo eseguito ancora') per tutta la durata
+    # del primo batch dopo un riavvio.
+    response["running"] = _auto_enrich_running_lock.locked()
+    return jsonify(response)
 
 
 # Un solo ciclo di arricchimento automatico alla volta: senza questa guardia,

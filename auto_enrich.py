@@ -114,8 +114,18 @@ def run_enrich_cycle(conn, scans_dir, timing=DEFAULT_TIMING, max_parallelism=DEF
             ip_list_file = Path(f.name)
         ts = scan_pipeline.now_iso().replace(":", "-")
         xml_out = scans_dir / f"autoenrich_{ts}.xml"
+        # NIENTE -Pn qui (a differenza degli altri preset di questo progetto,
+        # vedi la nota permanente sul perché di solito va sempre incluso):
+        # questi host sono candidati da un rilevamento precedente, molti dei
+        # quali risultano NON PIÙ raggiungibili in pratica (verificato: su
+        # un ciclo reale, appena 1 host su ~80 tentati ha risposto). Con -Pn
+        # nmap tratta comunque ogni host come "up" e prova la scansione
+        # completa, pagando l'intero --host-timeout (3m) per OGNI host morto
+        # — con centinaia di host così, un ciclo diventa impraticabile (ore
+        # per pochissimi risultati). Senza -Pn, un host non raggiungibile
+        # viene scartato dal ping in pochi secondi, non in 3 minuti.
         cmd = [
-            "-Pn", "-O", "-sV", "--osscan-guess", f"-T{timing}",
+            "-O", "-sV", "--osscan-guess", f"-T{timing}",
             "--max-parallelism", str(max_parallelism), "--max-retries", str(max_retries),
             "--host-timeout", host_timeout, "--top-ports", str(top_ports),
             "-oX", str(xml_out), "-iL", str(ip_list_file),

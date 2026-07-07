@@ -81,10 +81,14 @@
       {% if s.batches_done and s.batches_done < s.batches_total %}
       In corso (batch {{ s.batches_done }}/{{ s.batches_total }}, {{ auto_enrich_config.last_run_at }}):
       {{ s.hosts_enriched }}/{{ s.hosts_found }} arricchiti finora
+      {% elif auto_enrich_running %}
+      <i class="fas fa-spinner fa-spin"></i> In corso: {{ s.hosts_enriched }}/{{ s.hosts_found }} arricchiti finora
       {% else %}
       Ultimo ciclo completo ({{ auto_enrich_config.last_run_at }}):
       {{ s.hosts_enriched }}/{{ s.hosts_found }} arricchiti
       {% endif %}
+      {% elif auto_enrich_running %}
+      <i class="fas fa-spinner fa-spin"></i> Scansione in corso (primo batch, nessun host completato finora)...
       {% else %}
       Nessun ciclo eseguito ancora.
       {% endif %}
@@ -474,7 +478,14 @@ function refreshTrafficStats() {
         `Connessioni entrata: ${d.total.connections_in.toLocaleString('it-IT')}`;
 
       const bucketSeconds = d.bucket_minutes * 60;
-      const labels = d.series.map((b) => b.t.slice(11, 16));
+      // b.t arriva dal server come ora UTC "ingenua" (senza indicazione di
+      // fuso, es. "2026-07-07T09:38" — il container gira in UTC): va
+      // interpretata esplicitamente come UTC (suffisso 'Z') e poi formattata
+      // nel fuso Europa/Roma, altrimenti mostrerebbe l'ora UTC as-is
+      // (indietro di 1-2 ore rispetto all'ora locale reale).
+      const labels = d.series.map((b) =>
+        new Date(b.t + 'Z').toLocaleTimeString('it-IT', { timeZone: 'Europe/Rome', hour: '2-digit', minute: '2-digit' })
+      );
 
       trafficChart.data.labels = labels;
       trafficChart.data.datasets[0].data = d.series.map((b) => Math.round(b.bytes_sent / bucketSeconds));
@@ -520,14 +531,18 @@ function refreshAutoEnrichStatus() {
     .then(function (r) { return r.json(); })
     .then(function (d) {
       const el = document.getElementById('autoEnrichStatus');
+      const spinner = '<i class="fas fa-spinner fa-spin"></i> ';
       const s = d.last_run_summary;
       if (!s) {
-        el.textContent = 'Nessun ciclo eseguito ancora.';
+        el.innerHTML = d.running ? (spinner + 'Scansione in corso (primo batch, nessun host completato finora)...')
+          : 'Nessun ciclo eseguito ancora.';
         return;
       }
       if (s.batches_done && s.batches_done < s.batches_total) {
         el.textContent = 'In corso (batch ' + s.batches_done + '/' + s.batches_total + ', ' + d.last_run_at + '): ' +
           s.hosts_enriched + '/' + s.hosts_found + ' arricchiti finora';
+      } else if (d.running) {
+        el.innerHTML = spinner + 'In corso: ' + s.hosts_enriched + '/' + s.hosts_found + ' arricchiti finora';
       } else {
         el.textContent = 'Ultimo ciclo completo (' + d.last_run_at + '): ' +
           s.hosts_enriched + '/' + s.hosts_found + ' arricchiti';
@@ -536,7 +551,7 @@ function refreshAutoEnrichStatus() {
     .catch(function () {});
 }
 
-setInterval(refreshAutoEnrichStatus, 20000);
+setInterval(refreshAutoEnrichStatus, 15000);
 
 {% include "_effort_script.html" %}
 </script>

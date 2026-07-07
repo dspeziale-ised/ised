@@ -28,6 +28,14 @@ services:
         required: false
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-ised}:${POSTGRES_PASSWORD:-ised}@postgres:5432/${POSTGRES_DB:-ised}
+    volumes:
+      # Impostazioni salvate come file JSON in instance/ (auto_enrich_schedule,
+      # monitor_schedule, report_schedule, effort di rete, token...): senza
+      # questo volume, escluso dall'immagine (.dockerignore) perché il DB vero
+      # è Postgres, ogni rebuild del container le azzererebbe ai default
+      # (verificato: il checkbox "Arricchimento automatico" torna sempre
+      # attivo dopo un rebuild anche se l'utente lo aveva disattivato).
+      - webapp_instance:/app/instance
     ports:
       - "5200:5200"
     extra_hosts:
@@ -38,3 +46,4 @@ services:
 
 volumes:
   postgres_data:
+  webapp_instance:
