@@ -1891,11 +1891,19 @@ def api_auto_enrich_schedule():
     /api/monitor-schedule (che espone un intero form), qui la UI invia solo
     'enabled' — si carica la config esistente e si aggiorna solo quel campo,
     invece di ricostruirla da zero, per non azzerare timing/max_parallelism
-    (non modificabili dalla UI, ma persistenti) ad ogni toggle."""
+    (non modificabili dalla UI, ma persistenti) ad ogni toggle.
+
+    Se il checkbox passa da spento ad acceso, avvia subito un ciclo in
+    background invece di aspettare il prossimo giro dello scheduler (fino a
+    interval_minutes, di default 15) — l'utente che attiva l'arricchimento
+    si aspetta un effetto immediato, non un'attesa silenziosa."""
     if request.method == "POST":
         config = auto_enrich_schedule.load()
+        was_enabled = bool(config.get("enabled"))
         config["enabled"] = request.form.get("enabled") == "1"
         auto_enrich_schedule.save(config)
+        if config["enabled"] and not was_enabled:
+            threading.Thread(target=_run_auto_enrich_cycle_now, daemon=True).start()
     return jsonify(auto_enrich_schedule.load())
 
 
@@ -1903,20 +1911,24 @@ def api_auto_enrich_schedule():
 # un ciclo più lento dell'intervallo configurato (scansione -O -sV su molti
 # host, potenzialmente minuti) verrebbe rilanciato in sovrapposizione dal
 # tick successivo del loop, perché last_run_at non viene aggiornato fino al
-# termine del ciclo corrente (vedi mark_run, chiamato solo a fine ciclo).
+# termine del ciclo corrente (vedi mark_run, chiamato solo a fine ciclo) —
+# e per lo stesso motivo protegge anche l'avvio immediato dal checkbox
+# (vedi api_auto_enrich_schedule) da una sovrapposizione con un ciclo dello
+# scheduler periodico già in corso.
 _auto_enrich_running_lock = threading.Lock()
 
 
-def run_scheduled_auto_enrich_if_due():
-    """Se l'arricchimento automatico è attivo ed è trascorso l'intervallo
-    configurato, esegue un ciclo su tutti gli host senza OS rilevato."""
-    config = auto_enrich_schedule.load()
-    now = datetime.datetime.now()
-    if not auto_enrich_schedule.is_due(config, now):
-        return
+def _run_auto_enrich_cycle_now():
+    """Esegue un ciclo di arricchimento immediatamente (non condizionato da
+    is_due), protetto da _auto_enrich_running_lock: no-op silenzioso se un
+    ciclo è già in corso (periodico o da un precedente avvio immediato),
+    invece di sovrapporlo. Usata sia dal checkbox in dashboard (avvio
+    immediato) sia, indirettamente, dallo scheduler periodico."""
     if not _auto_enrich_running_lock.acquire(blocking=False):
-        return  # un ciclo precedente è ancora in corso: salta questo giro, non sovrapporre
+        return False
     try:
+        config = auto_enrich_schedule.load()
+        now = datetime.datetime.now()
         conn = scanner_db.connect(str(DB_PATH))
         try:
             result = auto_enrich.run_enrich_cycle(
@@ -1927,8 +1939,19 @@ def run_scheduled_auto_enrich_if_due():
         finally:
             conn.close()
         auto_enrich_schedule.mark_run(now, result)
+        return True
     finally:
         _auto_enrich_running_lock.release()
+
+
+def run_scheduled_auto_enrich_if_due():
+    """Se l'arricchimento automatico è attivo ed è trascorso l'intervallo
+    configurato, esegue un ciclo su tutti gli host senza OS rilevato."""
+    config = auto_enrich_schedule.load()
+    now = datetime.datetime.now()
+    if not auto_enrich_schedule.is_due(config, now):
+        return
+    _run_auto_enrich_cycle_now()
 
 
 def _auto_enrich_scheduler_loop():
