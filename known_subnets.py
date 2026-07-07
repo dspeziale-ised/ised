@@ -81,7 +81,7 @@ DEFAULT_MAIN_ARGS = (
     "--host-timeout 5m --stats-every 15s --script default"
 )
 DEFAULT_SNMP_ARGS = (
-    "-sU -p 161,162 -T2 --max-parallelism 2 --max-retries 1 --host-timeout 3m --stats-every 15s "
+    "-Pn -sU -p 161,162 -T2 --max-parallelism 2 --max-retries 1 --host-timeout 3m --stats-every 15s "
     "--script snmp-info,snmp-sysdescr,snmp-interfaces,snmp-netstat,snmp-processes,"
     "snmp-win32-software,snmp-win32-services,snmp-win32-shares,snmp-win32-users,snmp-ios-config"
 )

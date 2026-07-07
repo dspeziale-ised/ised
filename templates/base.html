@@ -250,10 +250,25 @@
     // libreria non si è caricata (es. CDN irraggiungibile): un'azione
     // distruttiva non deve mai restare senza conferma solo perché uno
     // script esterno non è disponibile.
-    const notifier = (typeof AWN !== 'undefined') ? new AWN({
-      position: 'top-right',
-      durations: { global: 3000, alert: 6000, success: 3000, warning: 5000 },
-    }) : null;
+    // AWN.default: il bundle UMD, essendo compilato da un modulo ES con
+    // 'export default', a volte espone la classe su AWN.default invece che
+    // su AWN stesso (dipende dalla build) — provare entrambi copre i due casi.
+    // try/catch attorno all'intera inizializzazione: se anche questo
+    // fallisce per un motivo imprevisto, notifierConfirm sotto deve
+    // comunque restare definita (con fallback al confirm nativo) — un
+    // errore qui non deve MAI lasciare i dialoghi di conferma rotti.
+    let notifier = null;
+    try {
+      const AWNConstructor = (typeof AWN !== 'undefined') ? (AWN.default || AWN) : null;
+      if (typeof AWNConstructor === 'function') {
+        notifier = new AWNConstructor({
+          position: 'top-right',
+          durations: { global: 3000, alert: 6000, success: 3000, warning: 5000 },
+        });
+      }
+    } catch (e) {
+      console.error('Awesome Notifications non disponibile, uso confirm/alert nativi:', e);
+    }
 
     window.notifierConfirm = function (message, onOk, onCancel) {
       if (notifier) {

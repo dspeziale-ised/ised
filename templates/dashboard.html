@@ -54,6 +54,32 @@
   </div>
 </div>
 
+<div class="card card-outline card-primary mb-3">
+  <div class="card-body py-2 d-flex align-items-center flex-wrap">
+    <div class="form-check mr-3">
+      <input type="checkbox" class="form-check-input" id="autoEnrichEnabled" {{ 'checked' if auto_enrich_config.enabled else '' }}>
+      <label class="form-check-label" for="autoEnrichEnabled">
+        <i class="fas fa-wand-magic-sparkles"></i> <strong>Arricchimento automatico host senza OS</strong>
+      </label>
+    </div>
+    <small class="text-muted mr-3 text-nowrap">
+      Ogni {{ auto_enrich_config.interval_minutes }} min &middot; -T{{ auto_enrich_config.timing }} &middot;
+      max {{ auto_enrich_config.max_parallelism }} host in parallelo
+    </small>
+    <span class="badge badge-pill badge-{{ 'warning' if hosts_without_os else 'success' }} mr-3">
+      {{ hosts_without_os }} host senza OS
+    </span>
+    <span class="text-muted small ml-auto" id="autoEnrichStatus">
+      {% if auto_enrich_config.last_run_summary %}
+      Ultimo ciclo ({{ auto_enrich_config.last_run_at }}):
+      {{ auto_enrich_config.last_run_summary.hosts_enriched }}/{{ auto_enrich_config.last_run_summary.hosts_found }} arricchiti
+      {% else %}
+      Nessun ciclo eseguito ancora.
+      {% endif %}
+    </span>
+  </div>
+</div>
+
 <div class="card card-outline card-secondary mb-3">
   <div class="card-header py-2">
     <h3 class="card-title">
@@ -453,6 +479,18 @@ function refreshTrafficStats() {
 
 refreshTrafficStats();
 setInterval(refreshTrafficStats, 15000);
+
+document.getElementById('autoEnrichEnabled').addEventListener('change', function () {
+  const checkbox = this;
+  const body = new URLSearchParams();
+  body.set('enabled', checkbox.checked ? '1' : '0');
+  checkbox.disabled = true;
+  fetch("{{ url_for('api_auto_enrich_schedule') }}", { method: 'POST', body: body })
+    .then(function (r) { return r.json(); })
+    .then(function (d) { checkbox.checked = !!d.enabled; })
+    .catch(function () { checkbox.checked = !checkbox.checked; alert('Errore di rete.'); })
+    .finally(function () { checkbox.disabled = false; });
+});
 
 {% include "_effort_script.html" %}
 </script>

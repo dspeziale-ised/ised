@@ -15,6 +15,8 @@ from pathlib import Path
 
 from flask import Flask, Response, abort, g, jsonify, redirect, render_template, request, url_for
 
+import auto_enrich
+import auto_enrich_schedule
 import classify
 import custom_scan
 import cve_lookup
@@ -811,6 +813,9 @@ def dashboard():
         "ORDER BY hosts_count DESC LIMIT 10"
     ).fetchall()
     last_scan = db.execute("SELECT * FROM scans ORDER BY id DESC LIMIT 1").fetchone()
+    hosts_without_os = db.execute(
+        "SELECT COUNT(*) c FROM hosts WHERE os_name IS NULL OR os_name = ''"
+    ).fetchone()["c"]
 
     return render_template(
         "dashboard.html",
@@ -825,6 +830,8 @@ def dashboard():
         effort_level=scan_effort.load_level(),
         effort_profile=scan_effort.current_profile(),
         effort_profiles=scan_effort.all_profiles(),
+        hosts_without_os=hosts_without_os,
+        auto_enrich_config=auto_enrich_schedule.load(),
     )
 
 
@@ -1878,6 +1885,66 @@ def start_monitor_scheduler():
         threading.Thread(target=_monitor_scheduler_loop, daemon=True).start()
 
 
+@app.route("/api/auto-enrich-schedule", methods=["GET", "POST"])
+def api_auto_enrich_schedule():
+    """Checkbox 'Arricchimento automatico' in dashboard: a differenza di
+    /api/monitor-schedule (che espone un intero form), qui la UI invia solo
+    'enabled' — si carica la config esistente e si aggiorna solo quel campo,
+    invece di ricostruirla da zero, per non azzerare timing/max_parallelism
+    (non modificabili dalla UI, ma persistenti) ad ogni toggle."""
+    if request.method == "POST":
+        config = auto_enrich_schedule.load()
+        config["enabled"] = request.form.get("enabled") == "1"
+        auto_enrich_schedule.save(config)
+    return jsonify(auto_enrich_schedule.load())
+
+
+# Un solo ciclo di arricchimento automatico alla volta: senza questa guardia,
+# un ciclo più lento dell'intervallo configurato (scansione -O -sV su molti
+# host, potenzialmente minuti) verrebbe rilanciato in sovrapposizione dal
+# tick successivo del loop, perché last_run_at non viene aggiornato fino al
+# termine del ciclo corrente (vedi mark_run, chiamato solo a fine ciclo).
+_auto_enrich_running_lock = threading.Lock()
+
+
+def run_scheduled_auto_enrich_if_due():
+    """Se l'arricchimento automatico è attivo ed è trascorso l'intervallo
+    configurato, esegue un ciclo su tutti gli host senza OS rilevato."""
+    config = auto_enrich_schedule.load()
+    now = datetime.datetime.now()
+    if not auto_enrich_schedule.is_due(config, now):
+        return
+    if not _auto_enrich_running_lock.acquire(blocking=False):
+        return  # un ciclo precedente è ancora in corso: salta questo giro, non sovrapporre
+    try:
+        conn = scanner_db.connect(str(DB_PATH))
+        try:
+            result = auto_enrich.run_enrich_cycle(
+                conn, str(BASE_DIR / "scans"),
+                timing=config.get("timing") or "3",
+                max_parallelism=config.get("max_parallelism") or 4,
+            )
+        finally:
+            conn.close()
+        auto_enrich_schedule.mark_run(now, result)
+    finally:
+        _auto_enrich_running_lock.release()
+
+
+def _auto_enrich_scheduler_loop():
+    while True:
+        try:
+            run_scheduled_auto_enrich_if_due()
+        except Exception as e:
+            print(f"[auto-enrich-scheduler] errore inatteso: {e}")
+        time.sleep(30)  # stessa granularità del monitor scheduler
+
+
+def start_auto_enrich_scheduler():
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not APP_DEBUG:
+        threading.Thread(target=_auto_enrich_scheduler_loop, daemon=True).start()
+
+
 if __name__ == "__main__":
     # Uso nativo di sempre: 127.0.0.1, debug/reloader attivi. Nel container
     # Docker (Dockerfile imposta APP_HOST=0.0.0.0/FLASK_DEBUG=0) il server
@@ -1887,6 +1954,7 @@ if __name__ == "__main__":
     APP_PORT = int(os.environ.get("APP_PORT", "5200"))
     start_report_scheduler()
     start_monitor_scheduler()
+    start_auto_enrich_scheduler()
     # threaded=True: senza, il server di sviluppo gestisce una richiesta alla
     # volta - una scansione SNMP sincrona da /hosts/<ip>/snmp-scan (che può
     # bloccare la richiesta per fino a qualche minuto, vedi host_snmp_scan)
