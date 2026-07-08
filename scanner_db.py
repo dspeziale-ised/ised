@@ -562,6 +562,17 @@ def get_host_enrichment(conn, host_id):
     return json.loads(row["enrichment_json"])
 
 
+def merge_host_enrichment(conn, host_id, updates):
+    """Come set_host_enrichment ma aggiorna solo le chiavi in 'updates'
+    sopra quelle già presenti (merge superficiale), invece di sostituire
+    l'intero dict — così un arricchimento parziale (es. solo gli script
+    NetBIOS/SMB da enrich_windows.py) non cancella le evidenze già
+    raccolte da un'altra fonte (es. i banner HTTP/SMB di enrich.py)."""
+    existing = get_host_enrichment(conn, host_id) or {}
+    existing.update(updates)
+    set_host_enrichment(conn, host_id, existing)
+
+
 def normalize_device_types(conn):
     """Forza device_type/ai_device_type sempre in minuscolo (idempotente)."""
     conn.execute(

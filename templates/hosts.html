@@ -15,6 +15,13 @@
         <i class="fas fa-stop"></i> Interrompi
       </button>
       <span class="badge job-status-badge mr-2" data-job="classify"></span>
+      <button type="button" class="btn btn-sm btn-info job-start-btn" data-job="enrich_windows">
+        <i class="fab fa-windows"></i> Arricchisci Windows
+      </button>
+      <button type="button" class="btn btn-sm btn-outline-danger job-stop-btn" data-job="enrich_windows" style="display:none;">
+        <i class="fas fa-stop"></i> Interrompi
+      </button>
+      <span class="badge job-status-badge mr-2" data-job="enrich_windows"></span>
       <button type="button" class="btn btn-sm btn-outline-secondary" data-toggle="collapse" data-target="#hostsFilterPanel">
         <i class="fas fa-filter"></i> Filtri
       </button>
@@ -24,6 +31,12 @@
     <p class="text-muted small">
       "Classifica con AI" classifica solo gli host nuovi/non ancora classificati. Per rifare
       tutto o per la scansione vulnerabilità vai in <a href="{{ url_for('admin_panel') }}">Amministrazione</a>.
+      "Arricchisci Windows" esegue <code>nmap --script nbstat,smb-os-discovery,smb-enum-*</code>
+      (NetBIOS: nome macchina/workgroup/MAC; SMB: OS/build, condivisioni, utenti, sessioni,
+      domini, gruppi — quanto disponibile dipende dai permessi anonimi/guest del host) su tutti
+      gli host già noti come Windows. Gli host Windows scoperti dall'arricchimento automatico lo
+      ricevono già in automatico; questo bottone serve a rifarlo su richiesta o per host
+      arricchiti prima che questa funzionalità esistesse.
     </p>
     <div class="collapse mb-3" id="hostsFilterPanel">
       <div class="row">
@@ -132,6 +145,6 @@ $(function () {
 });
 
 {% include "_jobs_script.html" %}
-initJobWidgets({ classify: {} });
+initJobWidgets({ classify: {}, enrich_windows: {} });
 </script>
 {% endblock %}

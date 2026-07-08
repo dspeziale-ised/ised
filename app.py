@@ -299,6 +299,12 @@ JOBS = {
         "log_file": LOGS_DIR / "netscan_log.txt",
         "label": "Scansione reti registrate",
     },
+    "enrich_windows": {
+        "cmd": [sys.executable, str(BASE_DIR / "enrich_windows.py")],
+        "lock_file": BASE_DIR / "enrich_windows.lock",
+        "log_file": LOGS_DIR / "enrich_windows_log.txt",
+        "label": "Arricchimento NetBIOS host Windows",
+    },
 }
 _job_processes = {}
 

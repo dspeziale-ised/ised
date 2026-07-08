@@ -19,6 +19,12 @@ toccare le altre porte), qui si tratta di host SENZA alcun dato OS/servizi
 ancora noto: usare scan_pipeline.run_and_store (upsert_host, sostituzione
 completa) è corretto, non c'è nulla di preesistente da preservare.
 
+Host risultati Windows in un batch ricevono subito anche un arricchimento
+NetBIOS (nmap --script nbstat, vedi enrich_windows.py) — arricchimento "a
+catena" sugli host di QUEL batch, senza aspettare un ciclo separato (lo
+stesso arricchimento resta disponibile anche su richiesta per TUTTI gli
+host Windows noti, dal bottone 'Arricchisci Windows' nella pagina Host).
+
 Uso:
     python auto_enrich.py                        # un ciclo su tutti gli host senza OS
     python auto_enrich.py --max-parallelism 2 --timing 2
@@ -29,6 +35,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import enrich_windows
 import scan_pipeline
 import scanner_db
 from job_lock import JobLock
@@ -140,13 +147,19 @@ def run_enrich_cycle(conn, scans_dir, timing=DEFAULT_TIMING, max_parallelism=DEF
             print(f"{batch_label}Timeout dopo {timeout}s: uso i risultati parziali.", flush=True)
         elif result["status"] == "error":
             print(f"{batch_label}Errore durante la scansione: {result['error_detail']}", flush=True)
+        windows_ips = []
         for host in result["hosts_up"]:
             os_label = host.get("os_name") or "OS ancora sconosciuto"
             print(f"  {host['ip']}: {len(host['services'])} servizi, {os_label}", flush=True)
             if host.get("os_name"):
                 total_enriched += 1
+                if enrich_windows.is_windows(host.get("os_name"), host.get("os_family")):
+                    windows_ips.append(host["ip"])
         if _STATUS_RANK[result["status"]] > _STATUS_RANK[worst_status]:
             worst_status = result["status"]
+
+        if windows_ips:
+            enrich_windows.enrich_hosts(conn, windows_ips, scans_dir, label_prefix=batch_label)
 
         if on_batch_done:
             on_batch_done({

@@ -87,11 +87,25 @@ def parse_host_element(elem):
 
     best_os = os_matches[0] if os_matches else {}
 
+    # Script a livello HOST (<hostscript>), distinti da quelli a livello
+    # porta dentro <ports><port> sopra: nbstat/smb-os-discovery/smb-enum-*
+    # non sono legati a una porta specifica (nmap li mette qui anche se
+    # innescati dalla presenza di 445/tcp o 137/udp), quindi vanno raccolti
+    # separatamente — un parser che guardasse solo dentro <port> li perderebbe
+    # silenziosamente (bug verificato: erano visibili nell'output testuale di
+    # nmap ma non finivano mai nel DB).
+    host_scripts = []
+    hostscript_el = elem.find("hostscript")
+    if hostscript_el is not None:
+        for script in hostscript_el.findall("script"):
+            host_scripts.append({"id": script.get("id"), "output": script.get("output")})
+
     return {
         "ip": ip,
         "hostname": _text_or_none(hostname),
         "mac_address": mac_address,
         "mac_vendor": mac_vendor,
+        "host_scripts": host_scripts,
         "state": state,
         "status_reason": status_reason,
         "ttl": ttl,
