@@ -160,9 +160,18 @@ function buildNode(node, depth) {
     li.className = 'tree-leaf';
     li.dataset.type = node.device_type || 'unknown';
     const label = node.hostname ? `${node.ip} (${node.hostname})` : node.ip;
+    // Info aggiuntive sulla foglia, solo se disponibili (un host scoperto
+    // solo da una scansione leggera non ha ancora né OS né porte note) —
+    // mostrate inline per non dover aprire ogni host per un'occhiata rapida.
+    const infoParts = [];
+    if (node.os_name) infoParts.push(node.os_name + (node.os_accuracy ? ` (${node.os_accuracy}%)` : ''));
+    if (node.open_ports) infoParts.push(node.open_ports + (node.open_ports === 1 ? ' porta aperta' : ' porte aperte'));
+    const info = infoParts.length
+      ? ` <span class="tree-leaf-info text-muted small">&mdash; ${infoParts.join(' &middot; ')}</span>`
+      : '';
     li.innerHTML =
       `<span class="leaf-dot" style="background:${node.color || '#adb5bd'}"></span>` +
-      `<a href="/hosts/${encodeURIComponent(node.ip)}">${label}</a>`;
+      `<a href="/hosts/${encodeURIComponent(node.ip)}">${label}</a>${info}`;
     return li;
   }
 

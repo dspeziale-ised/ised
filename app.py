@@ -1413,8 +1413,10 @@ def network_map():
 def api_network_map():
     db = get_db()
     rows = db.execute(
-        "SELECT ip, hostname, COALESCE(device_type,'unknown') device_type "
-        "FROM hosts ORDER BY ip"
+        "SELECT h.ip, h.hostname, COALESCE(h.device_type,'unknown') device_type, "
+        "h.os_name, h.os_accuracy, "
+        "(SELECT COUNT(*) FROM services s WHERE s.host_id = h.id AND s.state = 'open') open_ports "
+        "FROM hosts h ORDER BY h.ip"
     ).fetchall()
 
     root = {"name": "10.0.0.0/8", "children": {}}
@@ -1436,6 +1438,13 @@ def api_network_map():
             "hostname": r["hostname"] or "",
             "device_type": r["device_type"],
             "color": color_for_device_type(r["device_type"]),
+            # Info sulla foglia (se disponibili — un host scoperto solo da
+            # una scansione leggera, es. Discovery/-sn, non ha ancora né OS
+            # né porte note): mostrate direttamente nell'albero per non
+            # dover aprire ogni host per un'occhiata rapida.
+            "os_name": r["os_name"] or "",
+            "os_accuracy": r["os_accuracy"],
+            "open_ports": r["open_ports"],
             "leaf": True,
         })
 
